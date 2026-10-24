@@ -1,0 +1,15 @@
+{
+  "id": "/",
+  "name": "DND Kinerja",
+  "short_name": "DND Kinerja",
+  "description": "Dashboard kinerja, tugas, KPI, dan reward pegawai.",
+  "lang": "id-ID",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5f7fb",
+  "theme_color": "#4969ed",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

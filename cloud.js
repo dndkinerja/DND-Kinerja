@@ -21,7 +21,7 @@
       for(let u of oldUsers){let m=byEmail(u.email,u.username);if(m)map.set(u.id,Number(m.id));else{while(used.has(next))next++;map.set(u.id,next);used.add(next++)}}
       let migrated=oldUsers.map(u=>{let m=byEmail(u.email,u.username);return {id:map.get(u.id),username:u.username,email:u.email||'',name:u.name,title:u.title||'',role:m?.role||u.role||'user',approved:m?.approved??!!u.approved,avatar:u.avatar||''}});
       if(!migrated.some(u=>u.id===Number(own.data.id)))migrated.push({...dbUsers().find(x=>x.id===Number(own.data.id))});
-      let fresh=app.getDb();fresh.users=migrated;fresh.current=Number(own.data.id);fresh.tasks=local.tasks.map(t=>({...t,pic:map.get(t.pic)??t.pic}));fresh.settings={...fresh.settings,...local.settings};app.setDb(fresh);await sync();app.renderAll();app.toast('Data browser ini disalin ke database bersama.')
+      let fresh=app.getDb();fresh.users=migrated;fresh.current=Number(own.data.id);fresh.tasks=local.tasks.map(t=>({...t,pic:map.get(t.pic)??t.pic,pics:Array.isArray(t.pics)?t.pics.map(id=>map.get(id)??id):undefined}));fresh.settings={...fresh.settings,...local.settings};app.setDb(fresh);await sync();app.renderAll();app.toast('Data browser ini disalin ke database bersama.')
     }
   }
   function dbUsers(){return app.getDb().users}

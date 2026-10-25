@@ -1,6 +1,7 @@
 /* DND Kinerja cloud adapter: Supabase Auth + RLS protected shared state. */
 (()=>{
   const app=window.dndApp;
+  if(location.protocol==='file:')return;
   const URL='https://xqyrmxuzgoyffebwebfv.supabase.co';
   const KEY='sb_publishable_ufMk8DCrbmrcbHVC8PdCFQ_C92Oi8uW';
   if(!window.supabase?.createClient){app.toast('Layanan Supabase gagal dimuat. Periksa koneksi internet.');return}

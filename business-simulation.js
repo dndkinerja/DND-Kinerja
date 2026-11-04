@@ -77,9 +77,25 @@
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (_) { /* storage may be unavailable in private browsing */ }
   }
 
-  function costAmount(group, key) { const value = number(state[group][key]); return state.costModes?.[group]?.[key] === 'percent' ? number(state.revenue) * value / 100 : value; }
+  function directCostBase() {
+    const revenue = number(state.revenue);
+    const finalPph = revenue * number(state.pphRate) / 100;
+    const plannedProfit = revenue * number(state.profitTargetRate) / 100;
+    return Math.max(0, revenue - finalPph - plannedProfit);
+  }
+  function costAmount(group, key) {
+    const value = number(state[group][key]);
+    const base = group === 'direct' ? directCostBase() : number(state.revenue);
+    return state.costModes?.[group]?.[key] === 'percent' ? base * value / 100 : value;
+  }
   function totalCosts(group) { return Object.keys(state[group]).reduce((sum, key) => sum + costAmount(group, key), 0); }
-  function costBasisNote(group, key) { return state.costModes?.[group]?.[key] === 'percent' ? displayNumber(state[group][key]) + '% dari omzet target tahunan.' : 'Nilai biaya tahunan yang dimasukkan manual.'; }
+  function costBasisNote(group, key) {
+    if (state.costModes?.[group]?.[key] !== 'percent') return 'Nilai biaya tahunan yang dimasukkan manual.';
+    const rate = displayNumber(state[group][key]);
+    if (group !== 'direct') return rate + '% dari omzet target tahunan.';
+    const revenue = number(state.revenue), pph = revenue * number(state.pphRate) / 100, profit = revenue * number(state.profitTargetRate) / 100;
+    return rate + '% � (omzet ' + money(revenue) + '" PPh final ' + money(pph) + '  rencana laba ' + money(profit) + ').';
+  }
 
   function calculations() {
     const revenue = number(state.revenue);
@@ -105,9 +121,9 @@
   function setCostMode(group, key, nextMode) {
     const oldMode = state.costModes[group][key] || 'amount';
     if (oldMode === nextMode) return;
-    const revenue = number(state.revenue);
+    const base = group === 'direct' ? directCostBase() : number(state.revenue);
     const currentAmount = costAmount(group, key);
-    const nextValue = nextMode === 'percent' ? (revenue ? currentAmount / revenue * 100 : 0) : currentAmount;
+    const nextValue = nextMode === 'percent' ? (base ? currentAmount / base * 100 : 0) : currentAmount;
     state.costModes[group][key] = nextMode;
     state[group][key] = nextValue;
     const field = input('projection_' + group + '_' + key);
@@ -118,7 +134,7 @@
   function costFields(containerId, groupName, labels) {
     input(containerId).innerHTML = labels.map(([key, label]) => {
       const mode = state.costModes[groupName][key] || 'amount';
-      return '<label class="projection-cost-input"><span>' + label + '</span><div class="projection-cost-entry"><select id="projectionMode_' + groupName + '_' + key + '" aria-label="Satuan ' + label + '"><option value="amount" ' + (mode === 'amount' ? 'selected' : '') + '>Rp</option><option value="percent" ' + (mode === 'percent' ? 'selected' : '') + '>%</option></select><input type="text" inputmode="decimal" id="projection_' + groupName + '_' + key + '" aria-label="' + label + '" value="' + displayNumber(state[groupName][key]) + '"></div></label>';
+      return '<label class="projection-cost-input"><span>' + label + '</span><div class="projection-cost-control"><div class="projection-cost-entry"><select id="projectionMode_' + groupName + '_' + key + '" aria-label="Satuan ' + label + '"><option value="amount" ' + (mode === 'amount' ? 'selected' : '') + '>Rp</option><option value="percent" ' + (mode === 'percent' ? 'selected' : '') + '>%</option></select><input type="text" inputmode="decimal" id="projection_' + groupName + '_' + key + '" aria-label="' + label + '" value="' + displayNumber(state[groupName][key]) + '"></div><small class="projection-cost-result" id="projectionResult_' + groupName + '_' + key + '"></small></div></label>';
     }).join('');
     labels.forEach(([key]) => {
       bindLocaleInput(input('projection_' + groupName + '_' + key));
@@ -128,6 +144,16 @@
         persist(); renderBusinessProjection();
       });
     });
+  }
+
+  function renderCostPreviews() {
+    [['direct', directLabels], ['operating', operatingLabels]].forEach(([group, labels]) => labels.forEach(([key]) => {
+      const result = input('projectionResult_' + group + '_' + key);
+      if (!result) return;
+      const isPercent = state.costModes?.[group]?.[key] === 'percent';
+      result.textContent = isPercent ? 'Hasil hitung: ' + money(costAmount(group, key)) : '';
+      result.hidden = !isPercent;
+    }));
   }
 
   function setInputs() {
@@ -189,6 +215,7 @@
   function renderBusinessProjection() {
     if (!input('projectionRevenue')) return;
     const calc = calculations();
+    renderCostPreviews();
     input('projectionKpiRevenue').textContent = money(calc.revenue);
     input('projectionKpiGross').textContent = money(calc.gross);
     input('projectionKpiGrossMargin').textContent = `Margin kotor ${calc.grossMargin.toLocaleString('id-ID', { maximumFractionDigits: 1 })}%`;

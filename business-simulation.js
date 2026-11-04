@@ -17,7 +17,33 @@
     ['depreciation', 'Penyusutan dan biaya pembiayaan'], ['otherOperating', 'Biaya operasional lainnya']
   ];
   const money = value => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number.isFinite(value) ? value : 0);
-  const number = value => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 0;
+  const parseLocaleNumber = value => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    let raw = String(value ?? '').trim().replace(/[^0-9,.-]/g, '');
+    if (!raw || raw === '-' || raw === ',' || raw === '.') return 0;
+    const comma = raw.lastIndexOf(','), dot = raw.lastIndexOf('.');
+    if (comma >= 0 && dot >= 0) {
+      raw = comma > dot ? raw.replace(/\./g, '').replace(',', '.') : raw.replace(/,/g, '');
+    } else if (comma >= 0) {
+      raw = raw.replace(/\./g, '').replace(',', '.');
+    } else if (dot >= 0) {
+      const parts = raw.split('.');
+      if (parts.length > 2) {
+        const decimalPart = parts.pop();
+        raw = parts.join('') + (decimalPart.length <= 2 ? '.' + decimalPart : decimalPart);
+      } else if (parts[1].length === 3) raw = parts.join('');
+    }
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  };
+  const number = value => parseLocaleNumber(value);
+  const displayNumber = value => new Intl.NumberFormat('id-ID', { maximumFractionDigits: 2 }).format(number(value));
+  const bindLocaleInput = el => {
+    if (!el || el.dataset.localeBound) return;
+    el.dataset.localeBound = 'true';
+    el.addEventListener('focus', () => { const value = number(el.value); el.value = value ? String(value) : ''; });
+    el.addEventListener('blur', () => { el.value = displayNumber(el.value); });
+  };
   const input = id => document.getElementById(id);
   const safePercent = value => Math.min(100, Math.max(0, number(value)));
   let state = load();
@@ -60,7 +86,8 @@
   }
 
   function costFields(containerId, groupName, labels) {
-    input(containerId).innerHTML = labels.map(([key, label]) => `<label class="projection-cost-input"><span>${label}</span><input type="number" min="0" step="100000" id="projection_${groupName}_${key}" aria-label="${label}" value="${number(state[groupName][key])}"></label>`).join('');
+    input(containerId).innerHTML = labels.map(([key, label]) => `<label class="projection-cost-input"><span>${label}</span><input type="text" inputmode="decimal" id="projection_${groupName}_${key}" aria-label="${label}" value="${displayNumber(state[groupName][key])}"></label>`).join('');
+    labels.forEach(([key]) => bindLocaleInput(input(`projection_${groupName}_${key}`)));
     labels.forEach(([key]) => input(`projection_${groupName}_${key}`).addEventListener('input', () => {
       state[groupName][key] = number(input(`projection_${groupName}_${key}`).value);
       persist(); renderBusinessProjection();
@@ -69,15 +96,15 @@
 
   function setInputs() {
     input('projectionYear').value = state.year;
-    input('projectionRevenue').value = number(state.revenue);
-    state.quarters.forEach((share, index) => { input(`projectionQ${index + 1}`).value = share; });
-    input('projectionPphRate').value = number(state.pphRate);
-    input('projectionVatRate').value = number(state.vatRate);
-    input('projectionInputVatShare').value = number(state.inputVatShare);
-    input('projectionHeadcount').value = Math.floor(number(state.payroll.headcount));
-    input('projectionMonthlySalary').value = number(state.payroll.monthlySalary);
-    input('projectionAnnualAllowance').value = number(state.payroll.annualAllowance);
-    input('projectionEmployerBenefits').value = number(state.payroll.monthlyEmployerBenefits);
+    input('projectionRevenue').value = displayNumber(state.revenue);
+    state.quarters.forEach((share, index) => { input(`projectionQ${index + 1}`).value = displayNumber(share); });
+    input('projectionPphRate').value = displayNumber(state.pphRate);
+    input('projectionVatRate').value = displayNumber(state.vatRate);
+    input('projectionInputVatShare').value = displayNumber(state.inputVatShare);
+    input('projectionHeadcount').value = displayNumber(Math.floor(number(state.payroll.headcount)));
+    input('projectionMonthlySalary').value = displayNumber(state.payroll.monthlySalary);
+    input('projectionAnnualAllowance').value = displayNumber(state.payroll.annualAllowance);
+    input('projectionEmployerBenefits').value = displayNumber(state.payroll.monthlyEmployerBenefits);
     costFields('projectionDirectCosts', 'direct', directLabels);
     costFields('projectionOperatingCosts', 'operating', operatingLabels);
   }
@@ -145,6 +172,7 @@
   }
 
   function bind() {
+    ['projectionYear', 'projectionRevenue', 'projectionQ1', 'projectionQ2', 'projectionQ3', 'projectionQ4', 'projectionPphRate', 'projectionVatRate', 'projectionInputVatShare', 'projectionHeadcount', 'projectionMonthlySalary', 'projectionAnnualAllowance', 'projectionEmployerBenefits'].forEach(id => bindLocaleInput(input(id)));
     input('projectionRevenue').addEventListener('input', () => { state.revenue = number(input('projectionRevenue').value); persist(); renderBusinessProjection(); });
     input('projectionYear').addEventListener('input', () => { state.year = Math.max(2020, Math.min(2100, number(input('projectionYear').value) || new Date().getFullYear())); persist(); });
     [1, 2, 3, 4].forEach(index => input(`projectionQ${index}`).addEventListener('input', () => {

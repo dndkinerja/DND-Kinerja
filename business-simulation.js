@@ -259,7 +259,7 @@
   }
 
   window.renderBusinessProjection = renderBusinessProjection;
-  window.getProjectedNetProfit = () => calculations().net;
+  window.getProjectedNetProfit = () => { const value = calculations().net; return Number.isFinite(value) ? value : 0; };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { setInputs(); bind(); renderBusinessProjection(); });
   else { setInputs(); bind(); renderBusinessProjection(); }
 })();

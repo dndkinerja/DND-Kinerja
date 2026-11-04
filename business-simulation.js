@@ -4,7 +4,7 @@
     year: new Date().getFullYear(), revenue: 0, quarters: [20, 25, 25, 30],
     pphRate: 1.75, vatRate: 11, inputVatShare: 80,
     direct: { materials: 0, labor: 0, subcontract: 0, equipment: 0, logistics: 0, otherDirect: 0 },
-    operating: { salaries: 0, office: 0, admin: 0, marketing: 0, depreciation: 0, otherOperating: 0 }, payroll: { headcount: 0, monthlySalary: 0, annualAllowance: 0, monthlyEmployerBenefits: 0 }
+    operating: { salaries: 0, office: 0, admin: 0, marketing: 0, depreciation: 0, otherOperating: 0 }, costModes: { direct: { materials: 'amount', labor: 'amount', subcontract: 'amount', equipment: 'amount', logistics: 'amount', otherDirect: 'amount' }, operating: { salaries: 'amount', office: 'amount', admin: 'amount', marketing: 'amount', depreciation: 'amount', otherOperating: 'amount' } }, payroll: { headcount: 0, monthlySalary: 0, annualAllowance: 0, monthlyEmployerBenefits: 0 }
   };
   const directLabels = [
     ['materials', 'Material dan bahan konstruksi'], ['labor', 'Tenaga kerja lapangan'],
@@ -56,6 +56,7 @@
         quarters: Array.isArray(saved.quarters) ? saved.quarters.slice(0, 4) : defaults.quarters.slice(),
         direct: { ...defaults.direct, ...(saved.direct || {}) },
         operating: { ...defaults.operating, ...(saved.operating || {}) },
+        costModes: { direct: { ...defaults.costModes.direct, ...(saved.costModes?.direct || {}) }, operating: { ...defaults.costModes.operating, ...(saved.costModes?.operating || {}) } },
         payroll: { ...defaults.payroll, ...(saved.payroll || {}) }
       } : structuredClone(defaults);
     } catch (_) { return structuredClone(defaults); }
@@ -65,33 +66,54 @@
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (_) { /* storage may be unavailable in private browsing */ }
   }
 
-  function total(group) { return Object.values(group).reduce((sum, value) => sum + number(value), 0); }
+  function costAmount(group, key) { const value = number(state[group][key]); return state.costModes?.[group]?.[key] === 'percent' ? number(state.revenue) * value / 100 : value; }
+  function totalCosts(group) { return Object.keys(state[group]).reduce((sum, key) => sum + costAmount(group, key), 0); }
+  function costBasisNote(group, key) { return state.costModes?.[group]?.[key] === 'percent' ? displayNumber(state[group][key]) + '% dari omzet target tahunan.' : 'Nilai biaya tahunan yang dimasukkan manual.'; }
 
   function calculations() {
     const revenue = number(state.revenue);
-    const direct = total(state.direct);
+    const direct = totalCosts('direct');
     const headcount = Math.floor(number(state.payroll.headcount));
     const payroll = { headcount, salary: headcount * number(state.payroll.monthlySalary) * 12, allowance: headcount * number(state.payroll.annualAllowance), employerBenefits: headcount * number(state.payroll.monthlyEmployerBenefits) * 12 };
     payroll.total = payroll.salary + payroll.allowance + payroll.employerBenefits;
-    const operatingOther = total(state.operating);
+    const operatingOther = totalCosts('operating');
     const operating = operatingOther + payroll.total;
     const gross = revenue - direct;
     const operatingProfit = gross - operating;
     const pph = revenue * number(state.pphRate) / 100;
     const vatOutput = revenue * number(state.vatRate) / 100;
-    const vatEligibleSpend = Math.max(0, direct + operatingOther - number(state.operating.salaries)) * safePercent(state.inputVatShare) / 100;
+    const vatEligibleSpend = Math.max(0, direct + operatingOther - costAmount('operating', 'salaries')) * safePercent(state.inputVatShare) / 100;
     const vatInput = vatEligibleSpend * number(state.vatRate) / 100;
     const vatPayable = Math.max(0, vatOutput - vatInput);
     return { revenue, direct, payroll, operatingOther, operating, gross, grossMargin: revenue ? gross / revenue * 100 : 0, operatingProfit, pph, net: operatingProfit - pph, vatOutput, vatEligibleSpend, vatInput, vatPayable, vatCreditCarry: Math.max(0, vatInput - vatOutput) };
   }
 
+  function setCostMode(group, key, nextMode) {
+    const oldMode = state.costModes[group][key] || 'amount';
+    if (oldMode === nextMode) return;
+    const revenue = number(state.revenue);
+    const currentAmount = costAmount(group, key);
+    const nextValue = nextMode === 'percent' ? (revenue ? currentAmount / revenue * 100 : 0) : currentAmount;
+    state.costModes[group][key] = nextMode;
+    state[group][key] = nextValue;
+    const field = input('projection_' + group + '_' + key);
+    if (field) field.value = displayNumber(nextValue);
+    persist(); renderBusinessProjection();
+  }
+
   function costFields(containerId, groupName, labels) {
-    input(containerId).innerHTML = labels.map(([key, label]) => `<label class="projection-cost-input"><span>${label}</span><input type="text" inputmode="decimal" id="projection_${groupName}_${key}" aria-label="${label}" value="${displayNumber(state[groupName][key])}"></label>`).join('');
-    labels.forEach(([key]) => bindLocaleInput(input(`projection_${groupName}_${key}`)));
-    labels.forEach(([key]) => input(`projection_${groupName}_${key}`).addEventListener('input', () => {
-      state[groupName][key] = number(input(`projection_${groupName}_${key}`).value);
-      persist(); renderBusinessProjection();
-    }));
+    input(containerId).innerHTML = labels.map(([key, label]) => {
+      const mode = state.costModes[groupName][key] || 'amount';
+      return '<label class="projection-cost-input"><span>' + label + '</span><div class="projection-cost-entry"><select id="projectionMode_' + groupName + '_' + key + '" aria-label="Satuan ' + label + '"><option value="amount" ' + (mode === 'amount' ? 'selected' : '') + '>Rp</option><option value="percent" ' + (mode === 'percent' ? 'selected' : '') + '>%</option></select><input type="text" inputmode="decimal" id="projection_' + groupName + '_' + key + '" aria-label="' + label + '" value="' + displayNumber(state[groupName][key]) + '"></div></label>';
+    }).join('');
+    labels.forEach(([key]) => {
+      bindLocaleInput(input('projection_' + groupName + '_' + key));
+      input('projectionMode_' + groupName + '_' + key).addEventListener('change', event => setCostMode(groupName, key, event.target.value));
+      input('projection_' + groupName + '_' + key).addEventListener('input', () => {
+        state[groupName][key] = number(input('projection_' + groupName + '_' + key).value);
+        persist(); renderBusinessProjection();
+      });
+    });
   }
 
   function setInputs() {
@@ -111,11 +133,11 @@
 
   function renderBreakdown(calc) {
     const rows = [];
-    directLabels.forEach(([key, label]) => rows.push({ label, category: 'Biaya langsung', amount: number(state.direct[key]), note: 'Dikurangkan untuk memperoleh laba kotor; dialokasikan menurut porsi omzet kuartal.' }));
+    directLabels.forEach(([key, label]) => rows.push({ label, category: 'Biaya langsung', amount: costAmount('direct', key), note: costBasisNote('direct', key) + ' Dikurangkan untuk memperoleh laba kotor.' }));
     rows.push({ label: 'Gaji pokok karyawan (12 bulan)', category: 'Gaji karyawan', amount: calc.payroll.salary, note: calc.payroll.headcount + ' orang × ' + money(number(state.payroll.monthlySalary)) + ' per bulan × 12 bulan.' });
     rows.push({ label: 'THR/tunjangan karyawan', category: 'Gaji karyawan', amount: calc.payroll.allowance, note: calc.payroll.headcount + ' orang × ' + money(number(state.payroll.annualAllowance)) + ' per tahun.' });
     rows.push({ label: 'Iuran BPJS bagian pemberi kerja', category: 'Gaji karyawan', amount: calc.payroll.employerBenefits, note: calc.payroll.headcount + ' orang × ' + money(number(state.payroll.monthlyEmployerBenefits)) + ' per bulan × 12 bulan.' });
-    operatingLabels.forEach(([key, label]) => rows.push({ label, category: 'Operasional lainnya', amount: number(state.operating[key]), note: 'Dikurangkan setelah laba kotor untuk memperoleh laba operasional.' }));
+    operatingLabels.forEach(([key, label]) => rows.push({ label, category: 'Operasional lainnya', amount: costAmount('operating', key), note: costBasisNote('operating', key) + ' Dikurangkan dalam biaya operasional.' }));
     rows.push({ label: 'Laba kotor', category: 'Hasil usaha', amount: calc.gross, note: 'Omzet sebelum PPN dikurangi biaya langsung pekerjaan.' });
     rows.push({ label: 'Laba operasional', category: 'Hasil usaha', amount: calc.operatingProfit, note: 'Laba kotor dikurangi seluruh biaya operasional.' });
     rows.push({ label: 'PPh final jasa konstruksi', category: 'Pajak penghasilan', amount: calc.pph, note: `${number(state.pphRate).toLocaleString('id-ID')}% dari omzet sebelum PPN; asumsi berdasarkan pembayaran.` });

@@ -259,6 +259,7 @@
   }
 
   window.renderBusinessProjection = renderBusinessProjection;
+  window.getProjectedNetProfit = () => calculations().net;
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { setInputs(); bind(); renderBusinessProjection(); });
   else { setInputs(); bind(); renderBusinessProjection(); }
 })();

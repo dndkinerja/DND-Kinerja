@@ -3,14 +3,16 @@ UPDATE FITUR TARGET PROYEKSI MULTI-TAHUN DND KINERJA
 File utama: index.html
 File fitur: business-simulation.js
 
+Perbaikan: tahun pada kolom Pilih / tambah tahun kini menjadi sumber utama saat menyimpan. Tombol simpan akan menyimpan pada tahun yang diketik, meskipun tombol Gunakan tahun belum ditekan.
+
 Cara pemasangan:
 1. Backup folder aplikasi DND Kinerja yang sedang digunakan.
 2. Ganti index.html dan business-simulation.js dengan file dari paket ini.
 3. Jangan menghapus cloud.js, contracts.js, favicon.png, dan file pendukung lain yang sudah ada pada aplikasi.
 4. Buka ulang aplikasi, masuk ke menu Simulasi Biaya & Proyeksi Bisnis.
-5. Masukkan tahun target pada kolom Pilih / tambah tahun, klik Gunakan tahun.
+5. Ketik tahun target (misalnya 2027). Klik Gunakan tahun atau langsung klik Simpan target 2027.
 6. Isi asumsi omzet, biaya, gaji, dan pajak, lalu klik Simpan target tahun ini.
-7. Target tersimpan muncul dalam daftar. Klik Edit atau Buka / Edit untuk memuat kembali dan mengubah data. Klik Simpan target tahun ini untuk memperbarui target tahun yang sama. Hapus tersedia pada daftar.
+7. Target tersimpan muncul dalam daftar. Klik Edit atau Buka / Edit untuk memuat kembali dan mengubah data. Simpan kembali untuk memperbarui tahun tersebut.
 
 Penyimpanan:
 - Target multi-tahun disimpan pada localStorage dan, saat database aplikasi tersedia, pada db.settings.businessProjectionPlans agar ikut mekanisme sinkronisasi aplikasi.

@@ -248,13 +248,15 @@
     input('projectionRevenue').addEventListener('input', () => { state.revenue = number(input('projectionRevenue').value); persist(); renderBusinessProjection(); });
     input('projectionYear').addEventListener('input', () => { state.year = Math.max(2020, Math.min(2100, number(input('projectionYear').value) || new Date().getFullYear())); persist(); });
     input('saveAnnualPlan').addEventListener('click', saveAnnualPlan);
-    input('loadAnnualPlan').addEventListener('click', loadAnnualPlan);
-    input('projectionSetYear')?.addEventListener('click', () => {
-      const year = Math.max(2020, Math.min(2100, Math.trunc(number(input('projectionYearQuick')?.value) || new Date().getFullYear())));
-      input('projectionYear').value = String(year);
-      input('projectionYear').dispatchEvent(new Event('input', { bubbles: true }));
-      renderBusinessProjection(); renderProjectionPlanControls();
+    input('projectionYearQuick')?.addEventListener('input', () => {
+      const raw = Math.trunc(number(input('projectionYearQuick').value));
+      if (raw >= 2020 && raw <= 2100) {
+        const plans = projectionPlanList();
+        input('saveAnnualPlan').textContent = plans[String(raw)] ? 'Perbarui target '+raw : 'Simpan target '+raw;
+      }
     });
+    input('loadAnnualPlan').addEventListener('click', loadAnnualPlan);
+    input('projectionSetYear')?.addEventListener('click', activateProjectionYear);
     input('projectionSavedPlanList')?.addEventListener('click', event => {
       const edit = event.target.closest('[data-plan-edit]'), del = event.target.closest('[data-plan-delete]');
       if (edit) { input('projectionSavedPlans').value = edit.dataset.planEdit; loadAnnualPlan(); }
@@ -316,7 +318,24 @@
     const list = input('projectionSavedPlanList');
     if (list) list.innerHTML = years.length ? '<div class="tablewrap"><table><thead><tr><th>Tahun</th><th>Target omzet</th><th>Proyeksi laba bersih</th><th>Terakhir disimpan</th><th>Aksi</th></tr></thead><tbody>' + years.map(y => { const p = plans[y]; return '<tr><td><b>'+y+'</b></td><td>'+money(p.metrics?.revenue || 0)+'</td><td>'+money(p.metrics?.net || 0)+'</td><td>'+(p.savedAt ? new Date(p.savedAt).toLocaleString('id-ID') : '—')+'</td><td><button type="button" class="btn ghost" data-plan-edit="'+y+'">Edit</button> <button type="button" class="btn danger" data-plan-delete="'+y+'">Hapus</button></td></tr>'; }).join('') + '</tbody></table></div>' : '<p style="font-size:11px;color:#82919a">Belum ada target multi-tahun yang disimpan.</p>';
   }
+  function activateProjectionYear() {
+    const raw = Math.trunc(number(input('projectionYearQuick')?.value));
+    if (!raw || raw < 2020 || raw > 2100) { window.alert('Masukkan tahun antara 2020 sampai 2100.'); return false; }
+    state.year = raw;
+    input('projectionYear').value = String(raw);
+    persist();
+    renderBusinessProjection();
+    renderProjectionPlanControls();
+    return true;
+  }
   function saveAnnualPlan() {
+    // Gunakan tahun pada kolom tambah tahun sebagai sumber utama saat menyimpan.
+    const quickYear = Math.trunc(number(input('projectionYearQuick')?.value));
+    if (quickYear >= 2020 && quickYear <= 2100 && quickYear !== Number(state.year)) {
+      state.year = quickYear;
+      input('projectionYear').value = String(quickYear);
+      persist();
+    }
     const plan = financialSnapshot(), plans = projectionPlanList(), year = String(plan.year);
     if (plans[year] && !window.confirm('Target '+year+' sudah tersimpan. Perbarui dengan asumsi saat ini?')) return;
     plans[year] = plan;

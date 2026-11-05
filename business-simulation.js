@@ -214,6 +214,9 @@
 
   function renderBusinessProjection() {
     if (!input('projectionRevenue')) return;
+    const directHost = input('projectionDirectCosts'), operatingHost = input('projectionOperatingCosts');
+    if (directHost && !directHost.children.length) costFields('projectionDirectCosts', 'direct', directLabels);
+    if (operatingHost && !operatingHost.children.length) costFields('projectionOperatingCosts', 'operating', operatingLabels);
     const calc = calculations();
     renderCostPreviews();
     input('projectionKpiRevenue').textContent = money(calc.revenue);
@@ -318,8 +321,14 @@
     const year = String(new Date().getFullYear()), plan = projectionPlanList()[year], actual = actualsForYear(year), status = input('planActualYearLabel');
     if (status) status.textContent = 'Tahun '+year+(plan ? ' · target tersimpan' : ' · target belum disimpan');
     const rows = [['Omzet tahunan',plan?.metrics.revenue,actual?.revenue],['Laba kotor',plan?.metrics.gross,actual?.gross],['Biaya operasional',plan?.metrics.operating,actual?.operating],['Laba bersih',plan?.metrics.net,actual?.net],...['I','II','III','IV'].map((q,i)=>['Omzet Kuartal '+q,plan?.metrics.quarterly?.[i],actual?.['q'+(i+1)]])];
-    const max = Math.max(1,...rows.flatMap(row=>[row[1]||0,row[2]||0])), amount = value => value == null ? '—' : money(value);
-    root.innerHTML = plan ? rows.map(([label,target,value])=>'<div class="plan-monitor-row"><div class="plan-monitor-label"><strong>'+label+'</strong><span>Target '+amount(target)+' · Realisasi '+amount(value)+'</span></div><div class="plan-monitor-bars"><i class="plan-bar-target" style="width:'+Math.max(target==null?0:2,Math.min(100,(target||0)/max*100))+'%"></i><i class="plan-bar-actual" style="width:'+Math.max(value==null?0:2,Math.min(100,(value||0)/max*100))+'%"></i></div></div>').join('') : '<p class="plan-monitor-empty">Simpan target tahunan dari menu Simulasi Biaya & Proyeksi untuk mulai membandingkan rencana dan realisasi.</p>';
+    const amount = value => value == null ? '—' : money(value);
+    const compact = value => value == null ? '—' : 'Rp ' + new Intl.NumberFormat('id-ID', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+    root.innerHTML = plan ? '<div class="plan-monitor-grid">' + rows.map(([label,target,value]) => {
+      const localMax = Math.max(1, target || 0, value || 0);
+      const targetHeight = target == null ? 0 : Math.max(3, (target || 0) / localMax * 100);
+      const actualHeight = value == null ? 0 : Math.max(3, (value || 0) / localMax * 100);
+      return '<div class="plan-metric-card"><strong class="plan-metric-title">'+label+'</strong><div class="plan-vertical-chart"><div class="plan-vertical-item"><span class="plan-vertical-value" title="'+amount(target)+'">'+compact(target)+'</span><div class="plan-vertical-track"><i class="plan-vertical-target" style="height:'+targetHeight+'%"></i></div><small>Target</small></div><div class="plan-vertical-item"><span class="plan-vertical-value" title="'+amount(value)+'">'+compact(value)+'</span><div class="plan-vertical-track"><i class="plan-vertical-actual" style="height:'+actualHeight+'%"></i></div><small>Realisasi</small></div></div></div>';
+    }).join('') + '</div>' : '<p class="plan-monitor-empty">Simpan target tahunan dari menu Simulasi Biaya & Proyeksi untuk mulai membandingkan rencana dan realisasi.</p>';
     const legend = input('planActualLegend'); if (legend) legend.style.display = plan ? 'flex' : 'none';
   }
   window.saveAnnualPlan = saveAnnualPlan; window.loadAnnualPlan = loadAnnualPlan; window.renderRealizationPage = renderRealizationPage; window.saveRealization = saveRealization; window.updateDashboardPlanMonitor = updateDashboardPlanMonitor;

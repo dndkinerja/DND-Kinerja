@@ -237,12 +237,16 @@
     ].map(([label, value]) => `<div class="projection-taxline"><span>${label}</span><strong>${value}</strong></div>`).join('');
     renderQuarters(calc);
     renderBreakdown(calc);
+    renderProjectionPlanControls();
   }
 
   function bind() {
     ['projectionYear', 'projectionRevenue', 'projectionProfitTargetRate', 'projectionQ1', 'projectionQ2', 'projectionQ3', 'projectionQ4', 'projectionPphRate', 'projectionVatRate', 'projectionInputVatShare', 'projectionAnnualSalary', 'projectionAnnualThr', 'projectionAnnualEmployerBenefits'].forEach(id => bindLocaleInput(input(id)));
     input('projectionRevenue').addEventListener('input', () => { state.revenue = number(input('projectionRevenue').value); persist(); renderBusinessProjection(); });
     input('projectionYear').addEventListener('input', () => { state.year = Math.max(2020, Math.min(2100, number(input('projectionYear').value) || new Date().getFullYear())); persist(); });
+    input('saveAnnualPlan').addEventListener('click', saveAnnualPlan);
+    input('loadAnnualPlan').addEventListener('click', loadAnnualPlan);
+    input('saveRealization').addEventListener('click', saveRealization);
     [1, 2, 3, 4].forEach(index => input(`projectionQ${index}`).addEventListener('input', () => {
       state.quarters[index - 1] = safePercent(input(`projectionQ${index}`).value); persist(); renderBusinessProjection();
     }));
@@ -258,6 +262,67 @@
     });
   }
 
+  const PLAN_KEY = 'dnd_business_plans_v1';
+  const ACTUAL_KEY = 'dnd_business_actuals_v1';
+  const readStore = key => { try { return JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch (_) { return {}; } };
+  const writeStore = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch (_) { return false; } };
+  const projectionPlanList = () => readStore(PLAN_KEY);
+  const actualsForYear = year => readStore(ACTUAL_KEY)[String(year)] || null;
+  const financialSnapshot = () => {
+    const calc = calculations();
+    return { year: number(state.year) || new Date().getFullYear(), inputs: structuredClone(state), savedAt: new Date().toISOString(), metrics: { revenue: calc.revenue, gross: calc.gross, operating: calc.operating, net: calc.net, quarterly: state.quarters.map(share => calc.revenue * number(share) / 100) } };
+  };
+  function renderProjectionPlanControls() {
+    const select = input('projectionSavedPlans'), button = input('saveAnnualPlan');
+    if (!select || !button) return;
+    const year = String(number(state.year) || new Date().getFullYear()), plans = projectionPlanList();
+    select.innerHTML = '<option value="">Pilih target tersimpan</option>' + Object.keys(plans).sort((a,b) => Number(b)-Number(a)).map(y => '<option value="'+y+'">Target '+y+'</option>').join('');
+    select.value = plans[year] ? year : '';
+    button.textContent = plans[year] ? 'Perbarui target '+year : 'Simpan target '+year;
+  }
+  function saveAnnualPlan() {
+    const plan = financialSnapshot(), plans = projectionPlanList(), year = String(plan.year);
+    if (plans[year] && !window.confirm('Target '+year+' sudah tersimpan. Perbarui dengan asumsi saat ini?')) return;
+    plans[year] = plan;
+    if (!writeStore(PLAN_KEY, plans)) { window.alert('Target belum dapat disimpan.'); return; }
+    renderProjectionPlanControls(); updateDashboardPlanMonitor(); window.alert('Target bisnis tahun '+year+' berhasil disimpan.');
+  }
+  function loadAnnualPlan() {
+    const select = input('projectionSavedPlans'), plan = select && projectionPlanList()[select.value];
+    if (!plan) return;
+    state = { ...structuredClone(defaults), ...structuredClone(plan.inputs) };
+    state.direct = { ...defaults.direct, ...(plan.inputs.direct || {}) };
+    state.operating = { ...defaults.operating, ...(plan.inputs.operating || {}) };
+    state.payroll = { ...defaults.payroll, ...(plan.inputs.payroll || {}) };
+    state.costModes = { direct: { ...defaults.costModes.direct, ...(plan.inputs.costModes?.direct || {}) }, operating: { ...defaults.costModes.operating, ...(plan.inputs.costModes?.operating || {}) } };
+    persist(); setInputs(); renderBusinessProjection(); renderProjectionPlanControls();
+  }
+  function renderRealizationPage() {
+    const yearField = input('realizationYear'); if (!yearField) return;
+    const year = new Date().getFullYear(), actual = actualsForYear(year) || {};
+    yearField.value = year;
+    ['revenue','gross','operating','net','q1','q2','q3','q4'].forEach(key => { const field = input('actual'+key[0].toUpperCase()+key.slice(1)); if (field) field.value = displayNumber(actual[key] || 0); });
+    const note = input('realizationSavedNote'); if (note) note.textContent = actual.savedAt ? 'Tersimpan '+new Date(actual.savedAt).toLocaleString('id-ID') : 'Belum ada realisasi tersimpan untuk tahun ini.';
+    const plan = projectionPlanList()[String(year)], summary = input('realizationPlanSummary');
+    if (summary) summary.innerHTML = plan ? [['Target omzet',plan.metrics.revenue],['Target laba kotor',plan.metrics.gross],['Target biaya operasional',plan.metrics.operating],['Target laba bersih',plan.metrics.net]].map(row => '<div class="projection-summary-row"><span>'+row[0]+'</span><strong>'+money(row[1])+'</strong></div>').join('') : '<p>Belum ada target tersimpan untuk tahun ini.</p>';
+  }
+  function saveRealization() {
+    const year = new Date().getFullYear(), record = { year, savedAt: new Date().toISOString() };
+    ['revenue','gross','operating','net','q1','q2','q3','q4'].forEach(key => { const field = input('actual'+key[0].toUpperCase()+key.slice(1)); record[key] = field ? (field.value.trim().startsWith('-') ? -number(field.value.slice(1)) : number(field.value)) : 0; });
+    const actuals = readStore(ACTUAL_KEY); actuals[String(year)] = record;
+    if (!writeStore(ACTUAL_KEY, actuals)) { window.alert('Realisasi belum dapat disimpan.'); return; }
+    renderRealizationPage(); updateDashboardPlanMonitor(); window.alert('Realisasi tahun '+year+' berhasil disimpan.');
+  }
+  function updateDashboardPlanMonitor() {
+    const root = input('planActualMonitor'); if (!root) return;
+    const year = String(new Date().getFullYear()), plan = projectionPlanList()[year], actual = actualsForYear(year), status = input('planActualYearLabel');
+    if (status) status.textContent = 'Tahun '+year+(plan ? ' · target tersimpan' : ' · target belum disimpan');
+    const rows = [['Omzet tahunan',plan?.metrics.revenue,actual?.revenue],['Laba kotor',plan?.metrics.gross,actual?.gross],['Biaya operasional',plan?.metrics.operating,actual?.operating],['Laba bersih',plan?.metrics.net,actual?.net],...['I','II','III','IV'].map((q,i)=>['Omzet Kuartal '+q,plan?.metrics.quarterly?.[i],actual?.['q'+(i+1)])];
+    const max = Math.max(1,...rows.flatMap(row=>[row[1]||0,row[2]||0])), amount = value => value == null ? '—' : money(value);
+    root.innerHTML = plan ? rows.map(([label,target,value])=>'<div class="plan-monitor-row"><div class="plan-monitor-label"><strong>'+label+'</strong><span>Target '+amount(target)+' · Realisasi '+amount(value)+'</span></div><div class="plan-monitor-bars"><i class="plan-bar-target" style="width:'+Math.max(target==null?0:2,Math.min(100,(target||0)/max*100))+'%"></i><i class="plan-bar-actual" style="width:'+Math.max(value==null?0:2,Math.min(100,(value||0)/max*100))+'%"></i></div></div>').join('') : '<p class="plan-monitor-empty">Simpan target tahunan dari menu Simulasi Biaya & Proyeksi untuk mulai membandingkan rencana dan realisasi.</p>';
+    const legend = input('planActualLegend'); if (legend) legend.style.display = plan ? 'flex' : 'none';
+  }
+  window.saveAnnualPlan = saveAnnualPlan; window.loadAnnualPlan = loadAnnualPlan; window.renderRealizationPage = renderRealizationPage; window.saveRealization = saveRealization; window.updateDashboardPlanMonitor = updateDashboardPlanMonitor;
   window.renderBusinessProjection = renderBusinessProjection;
   window.getProjectedNetProfit = () => { const value = calculations().net; return Number.isFinite(value) ? value : 0; };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { setInputs(); bind(); renderBusinessProjection(); });

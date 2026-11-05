@@ -249,6 +249,22 @@
     input('projectionYear').addEventListener('input', () => { state.year = Math.max(2020, Math.min(2100, number(input('projectionYear').value) || new Date().getFullYear())); persist(); });
     input('saveAnnualPlan').addEventListener('click', saveAnnualPlan);
     input('loadAnnualPlan').addEventListener('click', loadAnnualPlan);
+    input('projectionSetYear')?.addEventListener('click', () => {
+      const year = Math.max(2020, Math.min(2100, Math.trunc(number(input('projectionYearQuick')?.value) || new Date().getFullYear())));
+      input('projectionYear').value = String(year);
+      input('projectionYear').dispatchEvent(new Event('input', { bubbles: true }));
+      renderBusinessProjection(); renderProjectionPlanControls();
+    });
+    input('projectionSavedPlanList')?.addEventListener('click', event => {
+      const edit = event.target.closest('[data-plan-edit]'), del = event.target.closest('[data-plan-delete]');
+      if (edit) { input('projectionSavedPlans').value = edit.dataset.planEdit; loadAnnualPlan(); }
+      if (del) {
+        const year = del.dataset.planDelete;
+        if (!window.confirm('Hapus target tahun '+year+'?')) return;
+        const plans = projectionPlanList(); delete plans[year]; saveProjectionPlanList(plans);
+        renderProjectionPlanControls(); updateDashboardPlanMonitor();
+      }
+    });
     input('saveRealization').addEventListener('click', saveRealization);
     [1, 2, 3, 4].forEach(index => input(`projectionQ${index}`).addEventListener('input', () => {
       state.quarters[index - 1] = safePercent(input(`projectionQ${index}`).value); persist(); renderBusinessProjection();
@@ -269,7 +285,20 @@
   const ACTUAL_KEY = 'dnd_business_actuals_v1';
   const readStore = key => { try { return JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch (_) { return {}; } };
   const writeStore = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch (_) { return false; } };
-  const projectionPlanList = () => readStore(PLAN_KEY);
+  const projectionPlanList = () => {
+    const appDb = window.dndApp?.getDb?.();
+    const shared = appDb?.settings?.businessProjectionPlans;
+    return shared && typeof shared === 'object' ? shared : readStore(PLAN_KEY);
+  };
+  const saveProjectionPlanList = plans => {
+    let localOk = writeStore(PLAN_KEY, plans);
+    const appDb = window.dndApp?.getDb?.();
+    if (appDb?.settings) {
+      appDb.settings.businessProjectionPlans = plans;
+      try { if (typeof window.save === 'function') window.save(); else window.dndApp.saveLocal?.(); } catch (_) { /* local fallback remains available */ }
+    }
+    return localOk;
+  };
   const actualsForYear = year => readStore(ACTUAL_KEY)[String(year)] || null;
   const financialSnapshot = () => {
     const calc = calculations();
@@ -279,15 +308,19 @@
     const select = input('projectionSavedPlans'), button = input('saveAnnualPlan');
     if (!select || !button) return;
     const year = String(number(state.year) || new Date().getFullYear()), plans = projectionPlanList();
-    select.innerHTML = '<option value="">Pilih target tersimpan</option>' + Object.keys(plans).sort((a,b) => Number(b)-Number(a)).map(y => '<option value="'+y+'">Target '+y+'</option>').join('');
+    const years = Object.keys(plans).filter(y => /^20\d{2}$|^2100$/.test(y)).sort((a,b) => Number(b)-Number(a));
+    select.innerHTML = '<option value="">Pilih target tersimpan</option>' + years.map(y => '<option value="'+y+'">Target '+y+'</option>').join('');
     select.value = plans[year] ? year : '';
     button.textContent = plans[year] ? 'Perbarui target '+year : 'Simpan target '+year;
+    const quick = input('projectionYearQuick'); if (quick) quick.value = year;
+    const list = input('projectionSavedPlanList');
+    if (list) list.innerHTML = years.length ? '<div class="tablewrap"><table><thead><tr><th>Tahun</th><th>Target omzet</th><th>Proyeksi laba bersih</th><th>Terakhir disimpan</th><th>Aksi</th></tr></thead><tbody>' + years.map(y => { const p = plans[y]; return '<tr><td><b>'+y+'</b></td><td>'+money(p.metrics?.revenue || 0)+'</td><td>'+money(p.metrics?.net || 0)+'</td><td>'+(p.savedAt ? new Date(p.savedAt).toLocaleString('id-ID') : '—')+'</td><td><button type="button" class="btn ghost" data-plan-edit="'+y+'">Edit</button> <button type="button" class="btn danger" data-plan-delete="'+y+'">Hapus</button></td></tr>'; }).join('') + '</tbody></table></div>' : '<p style="font-size:11px;color:#82919a">Belum ada target multi-tahun yang disimpan.</p>';
   }
   function saveAnnualPlan() {
     const plan = financialSnapshot(), plans = projectionPlanList(), year = String(plan.year);
     if (plans[year] && !window.confirm('Target '+year+' sudah tersimpan. Perbarui dengan asumsi saat ini?')) return;
     plans[year] = plan;
-    if (!writeStore(PLAN_KEY, plans)) { window.alert('Target belum dapat disimpan.'); return; }
+    if (!saveProjectionPlanList(plans)) { window.alert('Target belum dapat disimpan.'); return; }
     renderProjectionPlanControls(); updateDashboardPlanMonitor(); window.alert('Target bisnis tahun '+year+' berhasil disimpan.');
   }
   function loadAnnualPlan() {

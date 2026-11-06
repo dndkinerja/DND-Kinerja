@@ -294,6 +294,9 @@
   }
   function renderBusinessProjection() {
     if (!input('projectionRevenue')) return;
+    const selectedYear = Math.trunc(number(state.year)) || new Date().getFullYear();
+    const yearHeading = input('projectionYearHeading');
+    if (yearHeading) yearHeading.textContent = String(selectedYear);
     renderPayrollRoster();
     const directHost = input('projectionDirectCosts'), operatingHost = input('projectionOperatingCosts');
     if (directHost && !directHost.children.length) costFields('projectionDirectCosts', 'direct', directLabels);

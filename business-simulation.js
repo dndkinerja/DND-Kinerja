@@ -46,6 +46,10 @@
   };
   const input = id => document.getElementById(id);
   const safePercent = value => Math.min(100, Math.max(0, number(value)));
+  function normalizedQuarterShares() {
+    const shares = state.quarters.map(safePercent), total = shares.reduce((sum, share) => sum + share, 0);
+    return total > 0 ? shares.map(share => share / total) : [0.25, 0.25, 0.25, 0.25];
+  }
   let state = load();
 
   function load() {
@@ -89,18 +93,104 @@
     return state.costModes?.[group]?.[key] === 'percent' ? base * value / 100 : value;
   }
   function totalCosts(group) { return Object.keys(state[group]).reduce((sum, key) => sum + costAmount(group, key), 0); }
+  function payrollRoster() {
+    const db = window.dndApp?.getDb?.();
+    if (!db?.settings) return { employees: [], records: {}, configured: false };
+    db.settings.employeePayroll ||= {};
+    const employees = (db.users || []).filter(employee => employee.role !== 'admin' && employee.approved !== false);
+    const records = db.settings.employeePayroll;
+    const configured = employees.some(employee => Boolean(records[String(employee.id)]?.startDate));
+    return { employees, records, configured };
+  }
+  function payrollTotals() {
+    const roster = payrollRoster();
+    if (!roster.configured) return { salary: number(state.payroll.annualSalary), allowance: number(state.payroll.annualThr), employerBenefits: number(state.payroll.annualEmployerBenefits), source: 'manual' };
+    const year = Math.trunc(number(state.year)) || new Date().getFullYear();
+    const yearStart = new Date(year, 0, 1), yearEnd = new Date(year, 11, 31);
+    const yearDays = Math.round((yearEnd - yearStart) / 86400000) + 1;
+    let salary = 0, allowance = 0, employerBenefits = 0;
+    for (const employee of roster.employees) {
+      const record = roster.records[String(employee.id)] || {};
+      if (!record.startDate) continue;
+      const start = new Date(record.startDate + 'T00:00:00');
+      const end = record.resignationDate ? new Date(record.resignationDate + 'T00:00:00') : yearEnd;
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < yearStart || start > yearEnd || end < start) continue;
+      const monthlySalary = number(record.monthlySalary), monthlyAllowance = number(record.monthlyAllowance), monthlyBenefits = number(record.monthlyEmployerBenefits);
+      let activeDays = 0;
+      for (let month = 0; month < 12; month++) {
+        const monthStart = new Date(year, month, 1), monthEnd = new Date(year, month + 1, 0);
+        const activeStart = new Date(Math.max(start.getTime(), monthStart.getTime()));
+        const activeEnd = new Date(Math.min(end.getTime(), monthEnd.getTime()));
+        if (activeEnd < activeStart) continue;
+        const days = Math.round((monthEnd - monthStart) / 86400000) + 1;
+        const daysActive = Math.round((activeEnd - activeStart) / 86400000) + 1;
+        activeDays += daysActive;
+        salary += (monthlySalary + monthlyAllowance) * daysActive / days;
+        employerBenefits += monthlyBenefits * daysActive / days;
+      }
+      const annualThrReserve = (monthlySalary + monthlyAllowance) * Math.min(1, activeDays / yearDays);
+      // THR is an estimated annual reserve, capped at one month's wage.
+      allowance += Math.min(monthlySalary + monthlyAllowance, annualThrReserve);
+    }
+    return { salary, allowance, employerBenefits, source: 'roster' };
+  }
+  const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+  function renderPayrollRoster() {
+    const host = input('projectionPayrollRoster');
+    if (!host) return;
+    const { employees, records } = payrollRoster();
+    const signature = employees.map(employee => [employee.id, employee.name, employee.title].join(':')).join('|');
+    if (host.dataset.rosterSignature === signature) return;
+    host.dataset.rosterSignature = signature;
+    if (!employees.length) {
+      host.innerHTML = '<p class="projection-help">Belum ada akun pegawai aktif. Tambahkan pegawai, atau isi total gaji, THR, dan BPJS manual di bawah.</p>';
+      return;
+    }
+    host.innerHTML = '<div class="tablewrap" style="max-height:330px;overflow:auto"><table style="min-width:760px;font-size:10px"><thead><tr><th>Pegawai</th><th>Mulai bekerja</th><th>Tanggal resign (opsional)</th><th>Gaji pokok / bulan</th><th>Tunjangan tetap / bulan</th><th>BPJS perusahaan / bulan</th></tr></thead><tbody>' + employees.map(employee => {
+      const record = records[String(employee.id)] || {};
+      const attr = (field, type, label) => '<input data-payroll-user="' + escapeHtml(employee.id) + '" data-payroll-field="' + field + '" type="' + type + '" aria-label="' + label + ' ' + escapeHtml(employee.name) + '" value="' + escapeHtml(type === 'date' ? (record[field] || '') : displayNumber(record[field])) + '" style="width:100%;min-width:112px;padding:7px 8px;border:1px solid #dce5e8;border-radius:7px;font:inherit;font-size:10px;color:#244654;background:#fff">';
+      return '<tr><td><strong>' + escapeHtml(employee.name || employee.username || 'Pegawai') + '</strong><br><small>' + escapeHtml(employee.title || '') + '</small></td><td>' + attr('startDate', 'date', 'Tanggal mulai') + '</td><td>' + attr('resignationDate', 'date', 'Tanggal resign') + '</td><td>' + attr('monthlySalary', 'text', 'Gaji pokok') + '</td><td>' + attr('monthlyAllowance', 'text', 'Tunjangan tetap') + '</td><td>' + attr('monthlyEmployerBenefits', 'text', 'Iuran BPJS perusahaan') + '</td></tr>';
+    }).join('') + '</tbody></table></div><p class="projection-help" style="margin:7px 0 0">Isi tanggal mulai bekerja untuk memasukkan pegawai ke proyeksi. Nominal gaji dan iuran dihitung prorata hari kalender aktif pada tahun yang dipilih.</p>';
+    host.querySelectorAll('[data-payroll-field]:not([type="date"])').forEach(bindLocaleInput);
+  }
+  function updatePayrollInputMode() {
+    const { configured } = payrollRoster(), totals = payrollTotals();
+    [['projectionAnnualSalary', totals.salary], ['projectionAnnualThr', totals.allowance], ['projectionAnnualEmployerBenefits', totals.employerBenefits]].forEach(([id, amount]) => {
+      const field = input(id);
+      if (!field) return;
+      field.readOnly = configured;
+      field.title = configured ? 'Dihitung dari data pegawai di atas.' : 'Mode manual: masukkan total tahunan. Isi tanggal mulai pegawai untuk beralih ke perhitungan otomatis.';
+      const label = field.closest('label');
+      if (label?.firstChild?.nodeType === Node.TEXT_NODE) label.firstChild.nodeValue = id === 'projectionAnnualThr' ? 'Cadangan THR tahunan ' + (configured ? '(estimasi)' : '(manual)') : id === 'projectionAnnualEmployerBenefits' ? 'BPJS perusahaan tahunan ' + (configured ? '(otomatis)' : '(manual)') : 'Total gaji dan tunjangan tahunan ' + (configured ? '(otomatis)' : '(manual)');
+      if (configured || document.activeElement !== field) field.value = displayNumber(amount);
+    });
+  }
+  function savePayrollRow(event) {
+    const field = event.target.closest('[data-payroll-user][data-payroll-field]');
+    if (!field) return;
+    const db = window.dndApp?.getDb?.();
+    if (!db?.settings) return;
+    db.settings.employeePayroll ||= {};
+    const userId = String(field.dataset.payrollUser), key = field.dataset.payrollField;
+    db.settings.employeePayroll[userId] ||= {};
+    db.settings.employeePayroll[userId][key] = field.type === 'date' ? field.value : Math.max(0, number(field.value));
+    if (typeof window.save === 'function') window.save();
+    else window.dndApp?.saveLocal?.();
+    updatePayrollInputMode();
+    renderBusinessProjection();
+  }
   function costBasisNote(group, key) {
     if (state.costModes?.[group]?.[key] !== 'percent') return 'Nilai biaya tahunan yang dimasukkan manual.';
     const rate = displayNumber(state[group][key]);
     if (group !== 'direct') return rate + '% dari omzet target tahunan.';
     const revenue = number(state.revenue), pph = revenue * number(state.pphRate) / 100, profit = revenue * number(state.profitTargetRate) / 100;
-    return rate + '% � (omzet ' + money(revenue) + '" PPh final ' + money(pph) + '  rencana laba ' + money(profit) + ').';
+    const base = Math.max(0, revenue - pph - profit);
+    return rate + '% × (omzet ' + money(revenue) + ' − PPh final ' + money(pph) + ' − rencana laba ' + money(profit) + ') = ' + money(base * number(state[group][key]) / 100) + '.';
   }
-
   function calculations() {
     const revenue = number(state.revenue);
     const direct = totalCosts('direct');
-    const payroll = { salary: number(state.payroll.annualSalary), allowance: number(state.payroll.annualThr), employerBenefits: number(state.payroll.annualEmployerBenefits) };
+    const payroll = payrollTotals();
     payroll.total = payroll.salary + payroll.allowance + payroll.employerBenefits;
     const operatingOther = totalCosts('operating');
     const operating = operatingOther + payroll.total;
@@ -164,9 +254,8 @@
     input('projectionVatRate').value = displayNumber(state.vatRate);
     input('projectionInputVatShare').value = displayNumber(state.inputVatShare);
     input('projectionProfitTargetRate').value = displayNumber(state.profitTargetRate);
-    input('projectionAnnualSalary').value = displayNumber(state.payroll.annualSalary);
-    input('projectionAnnualThr').value = displayNumber(state.payroll.annualThr);
-    input('projectionAnnualEmployerBenefits').value = displayNumber(state.payroll.annualEmployerBenefits);
+    renderPayrollRoster();
+    updatePayrollInputMode();
     costFields('projectionDirectCosts', 'direct', directLabels);
     costFields('projectionOperatingCosts', 'operating', operatingLabels);
   }
@@ -174,9 +263,10 @@
   function renderBreakdown(calc) {
     const rows = [];
     directLabels.forEach(([key, label]) => rows.push({ label, category: 'Biaya langsung', amount: costAmount('direct', key), note: costBasisNote('direct', key) + ' Dikurangkan untuk memperoleh laba kotor.' }));
-    rows.push({ label: 'Gaji dan tunjangan karyawan', category: 'Gaji karyawan', amount: calc.payroll.salary, note: 'Total tahunan diinput manual.' });
-    rows.push({ label: 'THR/tunjangan tahunan', category: 'Gaji karyawan', amount: calc.payroll.allowance, note: 'Total tahunan diinput manual.' });
-    rows.push({ label: 'Iuran BPJS bagian pemberi kerja', category: 'Gaji karyawan', amount: calc.payroll.employerBenefits, note: 'Total tahunan diinput manual.' });
+    const payrollNote = calc.payroll.source === 'roster' ? 'Dihitung dari gaji bulanan dan hari kerja aktif pada tahun proyeksi.' : 'Total tahunan diisi manual karena belum ada tanggal mulai bekerja pada daftar pegawai.';
+    rows.push({ label: 'Gaji pokok dan tunjangan tetap', category: 'Gaji karyawan', amount: calc.payroll.salary, note: payrollNote });
+    rows.push({ label: 'Cadangan THR tahunan', category: 'Gaji karyawan', amount: calc.payroll.allowance, note: calc.payroll.source === 'roster' ? 'Estimasi prorata masa kerja, maksimal satu bulan upah per tahun.' : payrollNote });
+    rows.push({ label: 'Iuran BPJS bagian pemberi kerja', category: 'Gaji karyawan', amount: calc.payroll.employerBenefits, note: payrollNote });
     operatingLabels.forEach(([key, label]) => rows.push({ label, category: 'Operasional lainnya', amount: costAmount('operating', key), note: costBasisNote('operating', key) + ' Dikurangkan dalam biaya operasional.' }));
     rows.push({ label: 'Laba kotor', category: 'Hasil usaha', amount: calc.gross, note: 'Omzet sebelum PPN dikurangi biaya langsung pekerjaan.' });
     rows.push({ label: 'Laba operasional', category: 'Hasil usaha', amount: calc.operatingProfit, note: 'Laba kotor dikurangi seluruh biaya operasional.' });
@@ -194,26 +284,17 @@
   function renderQuarters(calc) {
     const shares = state.quarters.map(safePercent);
     const shareTotal = shares.reduce((sum, value) => sum + value, 0);
-    const normalizer = shareTotal || 100;
+    const allocations = normalizedQuarterShares();
     const names = ['Kuartal I', 'Kuartal II', 'Kuartal III', 'Kuartal IV'];
-    const parts = shares.map(share => share / normalizer);
-    const quarterData = parts.map((part, index) => ({
-      name: names[index], share: shares[index], revenue: calc.revenue * part,
-      direct: calc.direct * part, gross: calc.gross * part,
-      operating: calc.operating * part, pph: calc.pph * part,
-      vatPayable: calc.vatPayable * part, net: calc.net * part
-    }));
-    input('projectionQuarterRows').innerHTML = quarterData.map(row => `<tr><td><strong>${row.name}</strong></td><td><div class="projection-quarter-bar"><i style="width:${Math.min(100, row.share)}%"></i>${row.share.toLocaleString('id-ID')}%</div></td><td>${money(row.revenue)}</td><td>${money(row.direct)}</td><td>${money(row.gross)}</td><td>${money(row.operating)}</td><td>${money(row.pph)}</td><td>${money(row.vatPayable)}</td><td><strong>${money(row.net)}</strong></td></tr>`).join('');
-    input('projectionQuarterFoot').innerHTML = `<tr><td>Total / target</td><td>${shareTotal.toLocaleString('id-ID')}%</td><td>${money(calc.revenue)}</td><td>${money(calc.direct)}</td><td>${money(calc.gross)}</td><td>${money(calc.operating)}</td><td>${money(calc.pph)}</td><td>${money(calc.vatPayable)}</td><td>${money(calc.net)}</td></tr>`;
-    const status = input('projectionShareStatus');
-    status.classList.toggle('warn', Math.abs(shareTotal - 100) > .01);
-    status.textContent = Math.abs(shareTotal - 100) <= .01
-      ? 'Porsi omzet kuartal berjumlah 100%.'
-      : `Porsi saat ini ${shareTotal.toLocaleString('id-ID')}%. Nilai omzet kuartal dinormalisasi otomatis agar total tetap sesuai target tahunan.`;
+    const quarterData = allocations.map((part, index) => ({ name: names[index], share: part * 100, revenue: calc.revenue * part, direct: calc.direct * part, gross: calc.gross * part, operating: calc.operating * part, pph: calc.pph * part, vatPayable: calc.vatPayable * part, net: calc.net * part }));
+    input('projectionQuarterRows').innerHTML = quarterData.map(row => `<tr><td><strong>${row.name}</strong></td><td><div class="projection-quarter-bar"><i style="width:${Math.min(100, row.share)}%"></i>${row.share.toLocaleString('id-ID',{maximumFractionDigits:2})}%</div></td><td>${money(row.revenue)}</td><td>${money(row.direct)}</td><td>${money(row.gross)}</td><td>${money(row.operating)}</td><td>${money(row.pph)}</td><td>${money(row.vatPayable)}</td><td><strong>${money(row.net)}</strong></td></tr>`).join('');
+    input('projectionQuarterFoot').innerHTML = `<tr><td>Total / target</td><td>100%</td><td>${money(calc.revenue)}</td><td>${money(calc.direct)}</td><td>${money(calc.gross)}</td><td>${money(calc.operating)}</td><td>${money(calc.pph)}</td><td>${money(calc.vatPayable)}</td><td>${money(calc.net)}</td></tr>`;
+    const status = input('projectionShareStatus'); status.classList.toggle('warn', Math.abs(shareTotal - 100) > .01);
+    status.textContent = Math.abs(shareTotal - 100) <= .01 ? 'Porsi omzet kuartal berjumlah 100%.' : shareTotal > 0 ? `Porsi saat ini ${shareTotal.toLocaleString('id-ID')}%. Pembagian kuartal dinormalisasi agar total omzet sama dengan target tahunan.` : 'Semua porsi 0%; omzet dibagi rata 25% per kuartal.';
   }
-
   function renderBusinessProjection() {
     if (!input('projectionRevenue')) return;
+    renderPayrollRoster();
     const directHost = input('projectionDirectCosts'), operatingHost = input('projectionOperatingCosts');
     if (directHost && !directHost.children.length) costFields('projectionDirectCosts', 'direct', directLabels);
     if (operatingHost && !operatingHost.children.length) costFields('projectionOperatingCosts', 'operating', operatingLabels);
@@ -226,6 +307,9 @@
     input('projectionKpiVat').textContent = money(calc.vatPayable);
     input('projectionKpiPlannedProfit').textContent = money(calc.plannedProfit);
     input('projectionKpiProfitTargetRate').textContent = 'Target ' + displayNumber(state.profitTargetRate) + '% dari omzet';
+    const profitPreview = input('projectionProfitTargetPreview');
+    if (profitPreview) profitPreview.textContent = 'Rencana laba bersih tahunan: ' + money(calc.plannedProfit) + '.';
+    updatePayrollInputMode();
     input('projectionPayrollTotal').textContent = 'Total biaya payroll tahunan: ' + money(calc.payroll.total) + ' — gaji/tunjangan ' + money(calc.payroll.salary) + ', THR ' + money(calc.payroll.allowance) + ', iuran BPJS perusahaan ' + money(calc.payroll.employerBenefits) + '.';
     input('projectionSummary').innerHTML = [
       ['Target omzet (di luar PPN)', calc.revenue], ['Total biaya langsung', -calc.direct], ['Laba kotor', calc.gross, true],
@@ -247,7 +331,11 @@
     ['projectionYear', 'projectionRevenue', 'projectionProfitTargetRate', 'projectionQ1', 'projectionQ2', 'projectionQ3', 'projectionQ4', 'projectionPphRate', 'projectionVatRate', 'projectionInputVatShare', 'projectionAnnualSalary', 'projectionAnnualThr', 'projectionAnnualEmployerBenefits'].forEach(id => bindLocaleInput(input(id)));
     input('projectionRevenue').addEventListener('input', () => { state.revenue = number(input('projectionRevenue').value); persist(); renderBusinessProjection(); });
     input('projectionYear').addEventListener('input', () => { state.year = Math.max(2020, Math.min(2100, number(input('projectionYear').value) || new Date().getFullYear())); persist(); });
-    input('saveAnnualPlan').addEventListener('click', saveAnnualPlan);
+    input('saveAnnualPlan')?.addEventListener('click', saveAnnualPlan);
+    input('projectionNewYear')?.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); addProjectionYear(); } });
+    input('addProjectionYear')?.addEventListener('click', addProjectionYear);
+    input('clearAllProjectionPlans')?.addEventListener('click', clearAllProjectionPlans);
+    input('projectionSavedPlans')?.addEventListener('change', () => { if (input('projectionSavedPlans').value) loadAnnualPlan(); });
     input('projectionYearQuick')?.addEventListener('input', () => {
       const raw = Math.trunc(number(input('projectionYearQuick').value));
       if (raw >= 2020 && raw <= 2100) {
@@ -255,7 +343,7 @@
         input('saveAnnualPlan').textContent = plans[String(raw)] ? 'Perbarui target '+raw : 'Simpan target '+raw;
       }
     });
-    input('loadAnnualPlan').addEventListener('click', loadAnnualPlan);
+    input('loadAnnualPlan')?.addEventListener('click', loadAnnualPlan);
     input('projectionSetYear')?.addEventListener('click', activateProjectionYear);
     input('projectionSavedPlanList')?.addEventListener('click', event => {
       const edit = event.target.closest('[data-plan-edit]'), del = event.target.closest('[data-plan-delete]');
@@ -267,7 +355,8 @@
         renderProjectionPlanControls(); updateDashboardPlanMonitor();
       }
     });
-    input('saveRealization').addEventListener('click', saveRealization);
+    input('saveRealization')?.addEventListener('click', saveRealization);
+    input('projectionPayrollRoster')?.addEventListener('change', savePayrollRow);
     [1, 2, 3, 4].forEach(index => input(`projectionQ${index}`).addEventListener('input', () => {
       state.quarters[index - 1] = safePercent(input(`projectionQ${index}`).value); persist(); renderBusinessProjection();
     }));
@@ -275,6 +364,7 @@
       state[key] = safePercent(input(id).value); persist(); renderBusinessProjection();
     }));
     [['projectionAnnualSalary', 'annualSalary'], ['projectionAnnualThr', 'annualThr'], ['projectionAnnualEmployerBenefits', 'annualEmployerBenefits']].forEach(([id, key]) => input(id).addEventListener('input', () => {
+      if (payrollRoster().configured) return;
       state.payroll[key] = number(input(id).value); persist(); renderBusinessProjection();
     }));
     input('projectionReset').addEventListener('click', () => {
@@ -288,25 +378,18 @@
   const readStore = key => { try { return JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch (_) { return {}; } };
   const writeStore = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch (_) { return false; } };
   const projectionPlanList = () => {
-    const appDb = window.dndApp?.getDb?.();
-    const shared = appDb?.settings?.businessProjectionPlans;
-    return shared && typeof shared === 'object' ? shared : readStore(PLAN_KEY);
+    const appDb = window.dndApp?.getDb?.(), shared = appDb?.settings?.businessProjectionPlans;
+    return { ...readStore(PLAN_KEY), ...(shared && typeof shared === 'object' ? shared : {}) };
   };
   const saveProjectionPlanList = plans => {
-    let localOk = writeStore(PLAN_KEY, plans);
-    const appDb = window.dndApp?.getDb?.();
-    if (appDb?.settings) {
-      appDb.settings.businessProjectionPlans = plans;
-      try { if (typeof window.save === 'function') window.save(); else window.dndApp.saveLocal?.(); } catch (_) { /* local fallback remains available */ }
-    }
-    return localOk;
-  };
-  const actualsForYear = year => readStore(ACTUAL_KEY)[String(year)] || null;
+    const localOk = writeStore(PLAN_KEY, plans), appDb = window.dndApp?.getDb?.(); let appOk = false;
+    if (appDb?.settings) { appDb.settings.businessProjectionPlans = plans; try { if (typeof window.save === 'function') { window.save(); appOk = true; } else if (window.dndApp.saveLocal) appOk = window.dndApp.saveLocal() !== false; } catch (_) { /* local fallback remains available */ } }
+    return localOk || appOk;
+  };  const actualsForYear = year => readStore(ACTUAL_KEY)[String(year)] || null;
   const financialSnapshot = () => {
-    const calc = calculations();
-    return { year: number(state.year) || new Date().getFullYear(), inputs: structuredClone(state), savedAt: new Date().toISOString(), metrics: { revenue: calc.revenue, gross: calc.gross, operating: calc.operating, net: calc.net, quarterly: state.quarters.map(share => calc.revenue * number(share) / 100) } };
-  };
-  function renderProjectionPlanControls() {
+    const calc = calculations(), allocations = normalizedQuarterShares();
+    return { year: number(state.year) || new Date().getFullYear(), inputs: structuredClone(state), savedAt: new Date().toISOString(), metrics: { revenue: calc.revenue, gross: calc.gross, operating: calc.operating, net: calc.net, quarterly: allocations.map(part => calc.revenue * part) } };
+  };  function renderProjectionPlanControls() {
     const select = input('projectionSavedPlans'), button = input('saveAnnualPlan');
     if (!select || !button) return;
     const year = String(number(state.year) || new Date().getFullYear()), plans = projectionPlanList();
@@ -318,7 +401,21 @@
     const list = input('projectionSavedPlanList');
     if (list) list.innerHTML = years.length ? '<div class="tablewrap"><table><thead><tr><th>Tahun</th><th>Target omzet</th><th>Proyeksi laba bersih</th><th>Terakhir disimpan</th><th>Aksi</th></tr></thead><tbody>' + years.map(y => { const p = plans[y]; return '<tr><td><b>'+y+'</b></td><td>'+money(p.metrics?.revenue || 0)+'</td><td>'+money(p.metrics?.net || 0)+'</td><td>'+(p.savedAt ? new Date(p.savedAt).toLocaleString('id-ID') : '—')+'</td><td><button type="button" class="btn ghost" data-plan-edit="'+y+'">Edit</button> <button type="button" class="btn danger" data-plan-delete="'+y+'">Hapus</button></td></tr>'; }).join('') + '</tbody></table></div>' : '<p style="font-size:11px;color:#82919a">Belum ada target multi-tahun yang disimpan.</p>';
   }
-  function activateProjectionYear() {
+  function addProjectionYear() {
+    const raw = Math.trunc(number(input('projectionNewYear')?.value));
+    if (!raw || raw < 2020 || raw > 2100) { window.alert('Masukkan tahun antara 2020 sampai 2100.'); return false; }
+    const year = String(raw), plans = projectionPlanList();
+    if (plans[year]) { input('projectionSavedPlans').value = year; loadAnnualPlan(); const status = input('projectionPlanStatus'); if (status) status.textContent = 'Target '+year+' dimuat. Ubah asumsi lalu simpan kembali untuk memperbarui.'; return true; }
+    state.year = raw; persist(); input('projectionYear').value = String(raw); renderBusinessProjection(); renderProjectionPlanControls();
+    const status = input('projectionPlanStatus'); if (status) status.textContent = 'Tahun '+year+' siap diisi. Simpan target setelah asumsi selesai.'; return true;
+  }
+  function clearAllProjectionPlans() {
+    const plans = projectionPlanList();
+    if (!Object.keys(plans).length) { const status = input('projectionPlanStatus'); if (status) status.textContent = 'Belum ada target yang tersimpan.'; return; }
+    if (!window.confirm('Hapus semua target proyeksi yang tersimpan?')) return;
+    if (!saveProjectionPlanList({})) { window.alert('Daftar target belum dapat dihapus.'); return; }
+    renderProjectionPlanControls(); updateDashboardPlanMonitor(); const status = input('projectionPlanStatus'); if (status) status.textContent = 'Semua target proyeksi telah dihapus.';
+  }  function activateProjectionYear() {
     const raw = Math.trunc(number(input('projectionYearQuick')?.value));
     if (!raw || raw < 2020 || raw > 2100) { window.alert('Masukkan tahun antara 2020 sampai 2100.'); return false; }
     state.year = raw;
@@ -340,7 +437,9 @@
     if (plans[year] && !window.confirm('Target '+year+' sudah tersimpan. Perbarui dengan asumsi saat ini?')) return;
     plans[year] = plan;
     if (!saveProjectionPlanList(plans)) { window.alert('Target belum dapat disimpan.'); return; }
-    renderProjectionPlanControls(); updateDashboardPlanMonitor(); window.alert('Target bisnis tahun '+year+' berhasil disimpan.');
+    renderProjectionPlanControls(); updateDashboardPlanMonitor();
+    const status = input('projectionPlanStatus'); if (status) status.textContent = 'Target bisnis tahun ' + year + ' berhasil disimpan. Ubah asumsi lalu tekan Perbarui target untuk mengeditnya.';
+    window.alert('Target bisnis tahun '+year+' berhasil disimpan.');
   }
   function loadAnnualPlan() {
     const select = input('projectionSavedPlans'), plan = select && projectionPlanList()[select.value];

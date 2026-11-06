@@ -514,6 +514,9 @@
     input('projectionRevenue').addEventListener('input', () => { state.revenue = number(input('projectionRevenue').value); persist(); renderBusinessProjection(); });
     input('projectionYear').addEventListener('input', () => { state.year = Math.max(2020, Math.min(2100, number(input('projectionYear').value) || new Date().getFullYear())); persist(); });
     input('saveAnnualPlan')?.addEventListener('click', saveAnnualPlan);
+    input('realizationYear')?.addEventListener('change', renderRealizationPage);
+    ['Revenue','Gross','Operating','Net','Q1','Q2','Q3','Q4'].forEach(suffix => { const field = input('actual'+suffix); bindLocaleInput(field); field?.addEventListener('input', renderRealizationComparison); });
+    input('saveRealization')?.addEventListener('click', saveRealization);
     input('projectionNewYear')?.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); addProjectionYear(); } });
     input('addProjectionYear')?.addEventListener('click', addProjectionYear);
     input('clearAllProjectionPlans')?.addEventListener('click', clearAllProjectionPlans);
@@ -568,7 +571,9 @@
     const localOk = writeStore(PLAN_KEY, plans), appDb = window.dndApp?.getDb?.(); let appOk = false;
     if (appDb?.settings) { appDb.settings.businessProjectionPlans = plans; try { if (typeof window.save === 'function') { window.save(); appOk = true; } else if (window.dndApp.saveLocal) appOk = window.dndApp.saveLocal() !== false; } catch (_) { /* local fallback remains available */ } }
     return localOk || appOk;
-  };  const actualsForYear = year => readStore(ACTUAL_KEY)[String(year)] || null;
+  };  const actualList = () => { const shared = window.dndApp?.getDb?.()?.settings?.businessActuals; return { ...readStore(ACTUAL_KEY), ...(shared && typeof shared === 'object' ? shared : {}) }; };
+  const actualsForYear = year => actualList()[String(year)] || null;
+  const saveActualList = actuals => { const localOk = writeStore(ACTUAL_KEY, actuals), appDb = window.dndApp?.getDb?.(); let appOk = false; if (appDb?.settings) { appDb.settings.businessActuals = actuals; try { if (typeof window.save === 'function') { window.save(); appOk = true; } else if (window.dndApp.saveLocal) appOk = window.dndApp.saveLocal() !== false; } catch (_) { /* local copy remains available */ } } return localOk || appOk; };
   const financialSnapshot = () => {
     const calc = calculations(), allocations = normalizedQuarterShares();
     return { year: number(state.year) || new Date().getFullYear(), inputs: structuredClone(state), savedAt: new Date().toISOString(), metrics: { revenue: calc.revenue, gross: calc.gross, operating: calc.operating, net: calc.net, quarterly: allocations.map(part => calc.revenue * part) } };
@@ -620,7 +625,7 @@
     if (plans[year] && !window.confirm('Target '+year+' sudah tersimpan. Perbarui dengan asumsi saat ini?')) return;
     plans[year] = plan;
     if (!saveProjectionPlanList(plans)) { window.alert('Target belum dapat disimpan.'); return; }
-    renderProjectionPlanControls(); updateDashboardPlanMonitor();
+    renderProjectionPlanControls(); updateDashboardPlanMonitor(); renderRealizationPage();
     const status = input('projectionPlanStatus'); if (status) status.textContent = 'Target bisnis tahun ' + year + ' berhasil disimpan. Ubah asumsi lalu tekan Perbarui target untuk mengeditnya.';
     window.alert('Target bisnis tahun '+year+' berhasil disimpan.');
   }
@@ -636,21 +641,44 @@
   }
   function renderRealizationPage() {
     const yearField = input('realizationYear'); if (!yearField) return;
-    const year = new Date().getFullYear(), actual = actualsForYear(year) || {};
-    yearField.value = year;
-    ['revenue','gross','operating','net','q1','q2','q3','q4'].forEach(key => { const field = input('actual'+key[0].toUpperCase()+key.slice(1)); if (field) field.value = displayNumber(actual[key] || 0); });
-    const note = input('realizationSavedNote'); if (note) note.textContent = actual.savedAt ? 'Tersimpan '+new Date(actual.savedAt).toLocaleString('id-ID') : 'Belum ada realisasi tersimpan untuk tahun ini.';
-    const plan = projectionPlanList()[String(year)], summary = input('realizationPlanSummary');
-    if (summary) summary.innerHTML = plan ? [['Target omzet',plan.metrics.revenue],['Target laba kotor',plan.metrics.gross],['Target biaya operasional',plan.metrics.operating],['Target laba bersih',plan.metrics.net]].map(row => '<div class="projection-summary-row"><span>'+row[0]+'</span><strong>'+money(row[1])+'</strong></div>').join('') : '<p>Belum ada target tersimpan untuk tahun ini.</p>';
+    const plans = projectionPlanList(), savedActuals = actualList(), currentYear = new Date().getFullYear();
+    const years = [...new Set([currentYear, ...Object.keys(plans), ...Object.keys(savedActuals)].map(Number).filter(year => year >= 2020 && year <= 2100))].sort((a,b) => b-a);
+    const selected = Number(yearField.value) || currentYear;
+    yearField.innerHTML = years.map(year => '<option value="'+year+'">'+year+(plans[String(year)]?' · target tersimpan':'')+'</option>').join('');
+    yearField.value = String(years.includes(selected) ? selected : currentYear);
+    const year = Number(yearField.value), actual = actualsForYear(year) || {};
+    ['revenue','gross','operating','net','q1','q2','q3','q4'].forEach(key => { const field = input('actual'+key[0].toUpperCase()+key.slice(1)); if (field) field.value = actual.savedAt ? displayNumber(actual[key] || 0) : ''; });
+    const note = input('realizationSavedNote'); if (note) note.textContent = actual.savedAt ? 'Tersimpan '+new Date(actual.savedAt).toLocaleString('id-ID') : 'Belum ada realisasi tersimpan untuk tahun '+year+'.';
+    renderRealizationComparison();
+  }
+  function renderRealizationComparison() {
+    const root = input('realizationComparison'); if (!root) return;
+    const year = Number(input('realizationYear')?.value) || new Date().getFullYear(), plan = projectionPlanList()[String(year)], actual = actualsForYear(year);
+    const metrics = [
+      ['Omzet tahunan',plan?.metrics?.revenue,actual?.revenue,false],
+      ['Laba kotor',plan?.metrics?.gross,actual?.gross,false],
+      ['Biaya operasional',plan?.metrics?.operating,actual?.operating,true],
+      ['Laba bersih',plan?.metrics?.net,actual?.net,false],
+      ...['I','II','III','IV'].map((quarter,index)=>['Omzet Kuartal '+quarter,plan?.metrics?.quarterly?.[index],actual?.['q'+(index+1)],false])
+    ];
+    root.innerHTML = metrics.map(([label,target,value,isCost]) => {
+      const hasActual = value !== undefined && value !== null, hasTarget = target !== undefined && target !== null;
+      const variance = hasActual && hasTarget ? value-target : null, ratio = hasActual && hasTarget && Number(target)>0 ? value/Number(target)*100 : null;
+      const favorable = variance===null ? false : isCost ? variance<=0 : variance>=0, cls = !hasActual?'realization-neutral':favorable?'realization-good':'realization-over';
+      const ratioText = ratio===null?'—':new Intl.NumberFormat('id-ID',{maximumFractionDigits:1}).format(ratio)+'%';
+      const varianceText = variance===null?'—':(variance>0?'+':'')+money(variance);
+      return '<tr><td><b>'+label+'</b></td><td>'+(hasTarget?money(target):'<span class="realization-neutral">Belum ada target</span>')+'</td><td>'+(hasActual?money(value):'<span class="realization-neutral">Belum diinput</span>')+'</td><td class="'+cls+'">'+varianceText+'</td><td><span class="'+cls+'">'+ratioText+'</span></td></tr>';
+    }).join('');
   }
   function saveRealization() {
-    const year = new Date().getFullYear(), record = { year, savedAt: new Date().toISOString() };
-    ['revenue','gross','operating','net','q1','q2','q3','q4'].forEach(key => { const field = input('actual'+key[0].toUpperCase()+key.slice(1)); record[key] = field ? (field.value.trim().startsWith('-') ? -number(field.value.slice(1)) : number(field.value)) : 0; });
-    const actuals = readStore(ACTUAL_KEY); actuals[String(year)] = record;
-    if (!writeStore(ACTUAL_KEY, actuals)) { window.alert('Realisasi belum dapat disimpan.'); return; }
-    renderRealizationPage(); updateDashboardPlanMonitor(); window.alert('Realisasi tahun '+year+' berhasil disimpan.');
-  }
-  function updateDashboardPlanMonitor() {
+    const year = Math.trunc(number(input('realizationYear')?.value));
+    if (!year || year < 2020 || year > 2100) { window.alert('Pilih tahun realisasi antara 2020 sampai 2100.'); return; }
+    const record = { year, savedAt: new Date().toISOString() };
+    ['revenue','gross','operating','net','q1','q2','q3','q4'].forEach(key => { const field = input('actual'+key[0].toUpperCase()+key.slice(1)); record[key] = field ? Math.max(0,number(field.value)) : 0; });
+    const actuals = actualList(); actuals[String(year)] = record;
+    if (!saveActualList(actuals)) { window.alert('Realisasi belum dapat disimpan.'); return; }
+    renderRealizationPage(); updateDashboardPlanMonitor(); window.dndApp?.toast?.('Realisasi tahun '+year+' berhasil disimpan.');
+  }  function updateDashboardPlanMonitor() {
     const root = input('planActualMonitor'); if (!root) return;
     const year = String(new Date().getFullYear()), plan = projectionPlanList()[year], actual = actualsForYear(year), status = input('planActualYearLabel');
     if (status) status.textContent = 'Tahun '+year+(plan ? ' · target tersimpan' : ' · target belum disimpan');

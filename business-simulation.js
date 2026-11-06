@@ -138,24 +138,90 @@
     const allowance = mode === 'manual' ? number(state.payroll.annualThr) : monthlyWage * (mode === 'multiplier' ? multiplier : 1);
     return { salary, allowance, employerBenefits, monthlyWage, thrMode: mode, thrMultiplier: multiplier, source: 'roster' };
   }
+  const ptkpValues = { 'TK/0': 54000000, 'TK/1': 58500000, 'TK/2': 63000000, 'TK/3': 67500000, 'K/0': 58500000, 'K/1': 63000000, 'K/2': 67500000, 'K/3': 72000000 };
+  function annualPph21(gross, ptkpStatus, activeMonths = 12) {
+    const jobExpense = Math.min(Math.max(0, gross) * 0.05, Math.max(0, activeMonths) * 500000);
+    const ptkp = ptkpValues[ptkpStatus] || ptkpValues['TK/0'];
+    const taxable = Math.floor(Math.max(0, gross - jobExpense - ptkp) / 1000) * 1000;
+    const brackets = [[60000000, .05], [250000000, .15], [500000000, .25], [5000000000, .30], [Infinity, .35]];
+    let previous = 0, tax = 0;
+    for (const [limit, rate] of brackets) {
+      const part = Math.max(0, Math.min(taxable, limit) - previous);
+      tax += part * rate; previous = limit;
+      if (taxable <= limit) break;
+    }
+    return Math.round(tax);
+  }
+  function estimateEmployeePph21(payroll = payrollTotals()) {
+    const { employees, records, configured } = payrollRoster(), year = Math.trunc(number(state.year)) || new Date().getFullYear();
+    let rows = [];
+    if (configured) {
+      const yearStart = new Date(year, 0, 1), yearEnd = new Date(year, 11, 31), multiplier = number(payroll.thrMultiplier ?? 1);
+      for (const employee of employees) {
+        const record = records[String(employee.id)] || {};
+        if (!record.startDate) continue;
+        const start = new Date(record.startDate + 'T00:00:00'), end = record.resignationDate ? new Date(record.resignationDate + 'T00:00:00') : yearEnd;
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < yearStart || start > yearEnd || end < start) continue;
+        const monthly = number(record.monthlySalary) + number(record.monthlyAllowance);
+        let salary = 0, activeMonths = 0;
+        for (let month = 0; month < 12; month++) {
+          const monthStart = new Date(year, month, 1), monthEnd = new Date(year, month + 1, 0);
+          const activeStart = new Date(Math.max(start.getTime(), monthStart.getTime())), activeEnd = new Date(Math.min(end.getTime(), monthEnd.getTime()));
+          if (activeEnd < activeStart) continue;
+          activeMonths++;
+          const days = Math.round((monthEnd - monthStart) / 86400000) + 1, daysActive = Math.round((activeEnd - activeStart) / 86400000) + 1;
+          salary += monthly * daysActive / days;
+        }
+        rows.push({ employee, record, salary, monthly, activeMonths, thr: 0 });
+      }
+      if (payroll.thrMode === 'manual') {
+        const totalSalary = rows.reduce((sum, row) => sum + row.salary, 0), equalShare = rows.length ? number(payroll.allowance) / rows.length : 0;
+        rows.forEach(row => { row.thr = totalSalary ? number(payroll.allowance) * row.salary / totalSalary : equalShare; });
+      } else rows.forEach(row => { row.thr = row.monthly * multiplier; });
+    } else {
+      const weights = employees.map(employee => {
+        const record = records[String(employee.id)] || {};
+        return Math.max(0, number(record.monthlySalary) + number(record.monthlyAllowance));
+      });
+      const weightTotal = weights.reduce((sum, value) => sum + value, 0), equalShare = employees.length ? 1 / employees.length : 0;
+      rows = employees.map((employee, index) => {
+        const record = records[String(employee.id)] || {}, share = weightTotal ? weights[index] / weightTotal : equalShare;
+        return { employee, record, salary: number(payroll.salary) * share, thr: number(payroll.allowance) * share, activeMonths: 12 };
+      });
+    }
+    const byId = {};
+    rows.forEach(row => {
+      const status = ptkpValues[row.record.ptkpStatus] ? row.record.ptkpStatus : 'TK/0';
+      const tax = annualPph21(row.salary + row.thr, status, row.activeMonths);
+      byId[String(row.employee.id)] = { tax, gross: row.salary + row.thr, status };
+    });
+    return { byId, total: Object.values(byId).reduce((sum, row) => sum + row.tax, 0), year };
+  }
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   function renderPayrollRoster() {
     const host = input('projectionPayrollRoster');
     if (!host) return;
     const { employees, records } = payrollRoster();
-    const signature = employees.map(employee => [employee.id, employee.name, employee.title].join(':')).join('|');
+    const english = localStorage.getItem('dnd_language') === 'en', signature = [english ? 'en' : 'id', ...employees.map(employee => [employee.id, employee.name, employee.title].join(':'))].join('|');
     if (host.dataset.rosterSignature === signature) return;
     host.dataset.rosterSignature = signature;
     if (!employees.length) {
       host.innerHTML = '<p class="projection-help">Belum ada akun pegawai aktif. Tambahkan pegawai, atau isi total gaji, THR, dan BPJS manual di bawah.</p>';
       return;
     }
-    host.innerHTML = '<div class="tablewrap" style="max-height:330px;overflow:auto"><table style="min-width:760px;font-size:10px"><thead><tr><th>Pegawai</th><th>Mulai bekerja</th><th>Tanggal resign (opsional)</th><th>Gaji pokok / bulan</th><th>Tunjangan tetap / bulan</th><th>BPJS perusahaan / bulan</th></tr></thead><tbody>' + employees.map(employee => {
+    const showPph21 = localStorage.getItem('dnd_show_employee_pph21') === 'true', estimates = estimateEmployeePph21();
+    const control = '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 10px;padding:11px 13px;border:1px solid #cce7e3;border-radius:10px;background:#f2f8f7"><label style="display:flex;align-items:center;gap:9px;margin:0;font-size:12px;font-weight:700;color:#244654"><input type="checkbox" id="projectionShowEmployeePph21" '+(showPph21?'checked':'')+' style="width:18px;height:18px;accent-color:#087e80">'+(english?'Show annual employee PPh 21':'Tampilkan PPh 21 pegawai per tahun')+'</label><small style="font-size:10px;color:#71818a">'+(english?'Annual estimate. PPh 21 is withheld from employee income.':'Estimasi setahun; PPh 21 dipotong dari penghasilan pegawai.')+'</small></div>';
+    host.innerHTML = control + '<div class="tablewrap" style="max-height:360px;overflow:auto"><table style="min-width:1040px;font-size:10px"><thead><tr><th>'+(english?'Employee':'Pegawai')+'</th><th>'+(english?'PTKP status':'Status PTKP')+'</th><th>'+(english?'Start date':'Mulai bekerja')+'</th><th>'+(english?'Resignation date (optional)':'Tanggal resign (opsional)')+'</th><th>'+(english?'Base salary / month':'Gaji pokok / bulan')+'</th><th>'+(english?'Fixed allowance / month':'Tunjangan tetap / bulan')+'</th><th>'+(english?'Employer BPJS / month':'BPJS perusahaan / bulan')+'</th><th class="employee-pph21-column">'+(english?'Estimated PPh 21 / year':'Estimasi PPh 21 / tahun')+'</th></tr></thead><tbody>' + employees.map(employee => {
       const record = records[String(employee.id)] || {};
       const attr = (field, type, label) => '<input data-payroll-user="' + escapeHtml(employee.id) + '" data-payroll-field="' + field + '" type="' + type + '" aria-label="' + label + ' ' + escapeHtml(employee.name) + '" value="' + escapeHtml(type === 'date' ? (record[field] || '') : displayNumber(record[field])) + '" style="width:100%;min-width:112px;padding:7px 8px;border:1px solid #dce5e8;border-radius:7px;font:inherit;font-size:10px;color:#244654;background:#fff">';
-      return '<tr><td><strong>' + escapeHtml(employee.name || employee.username || 'Pegawai') + '</strong><br><small>' + escapeHtml(employee.title || '') + '</small></td><td>' + attr('startDate', 'date', 'Tanggal mulai') + '</td><td>' + attr('resignationDate', 'date', 'Tanggal resign') + '</td><td>' + attr('monthlySalary', 'text', 'Gaji pokok') + '</td><td>' + attr('monthlyAllowance', 'text', 'Tunjangan tetap') + '</td><td>' + attr('monthlyEmployerBenefits', 'text', 'Iuran BPJS perusahaan') + '</td></tr>';
-    }).join('') + '</tbody></table></div><p class="projection-help" style="margin:7px 0 0">Isi tanggal mulai bekerja untuk memasukkan pegawai ke proyeksi. Nominal gaji dan iuran dihitung prorata hari kalender aktif pada tahun yang dipilih.</p>';
-    host.querySelectorAll('[data-payroll-field]:not([type="date"])').forEach(bindLocaleInput);
+      const options = ['TK/0','TK/1','TK/2','TK/3','K/0','K/1','K/2','K/3'].map(status => '<option value="'+status+'" '+((record.ptkpStatus||'TK/0')===status?'selected':'')+'>'+status+'</option>').join('');
+      const pph = estimates.byId[String(employee.id)]?.tax || 0;
+      return '<tr><td><strong>' + escapeHtml(employee.name || employee.username || (english?'Employee':'Pegawai')) + '</strong><br><small>' + escapeHtml(employee.title || '') + '</small></td><td><select data-payroll-user="'+escapeHtml(employee.id)+'" data-payroll-field="ptkpStatus" aria-label="'+(english?'PTKP status for ':'Status PTKP ')+escapeHtml(employee.name)+'" style="min-width:80px;padding:7px 8px;border:1px solid #dce5e8;border-radius:7px;background:#fff;color:#244654">'+options+'</select></td><td>' + attr('startDate', 'date', english?'Start date':'Tanggal mulai') + '</td><td>' + attr('resignationDate', 'date', english?'Resignation date':'Tanggal resign') + '</td><td>' + attr('monthlySalary', 'text', english?'Base salary':'Gaji pokok') + '</td><td>' + attr('monthlyAllowance', 'text', english?'Fixed allowance':'Tunjangan tetap') + '</td><td>' + attr('monthlyEmployerBenefits', 'text', english?'Employer BPJS':'Iuran BPJS perusahaan') + '</td><td class="employee-pph21-column" data-employee-pph21="'+escapeHtml(employee.id)+'" style="white-space:nowrap;font-weight:700;color:#087e80">'+money(pph)+'</td></tr>';
+    }).join('') + '</tbody></table></div><p class="projection-help" style="margin:7px 0 0">'+(english?'Enter each employee’s start date to include them in the projection. Salary and BPJS are prorated by active calendar days. Select each employee’s PTKP status for the annual PPh 21 estimate.':'Isi tanggal mulai bekerja untuk memasukkan pegawai ke proyeksi. Gaji dan BPJS dihitung prorata hari kalender aktif. Pilih status PTKP setiap pegawai untuk estimasi PPh 21 tahunan.')+'</p>';
+    host.querySelectorAll('input[data-payroll-field]:not([type="date"])').forEach(bindLocaleInput);
+    const applyPphVisibility = visible => host.querySelectorAll('.employee-pph21-column').forEach(cell => { cell.style.display = visible ? 'table-cell' : 'none'; });
+    applyPphVisibility(showPph21);
+    host.querySelector('#projectionShowEmployeePph21')?.addEventListener('change', event => { localStorage.setItem('dnd_show_employee_pph21', String(event.target.checked)); applyPphVisibility(event.target.checked); });
   }
   function updatePayrollInputMode() {
     const { configured } = payrollRoster(), totals = payrollTotals();
@@ -195,7 +261,7 @@
     db.settings.employeePayroll ||= {};
     const userId = String(field.dataset.payrollUser), key = field.dataset.payrollField;
     db.settings.employeePayroll[userId] ||= {};
-    db.settings.employeePayroll[userId][key] = field.type === 'date' ? field.value : Math.max(0, number(field.value));
+    db.settings.employeePayroll[userId][key] = field.type === 'date' ? field.value : key === 'ptkpStatus' ? field.value : Math.max(0, number(field.value));
     if (typeof window.save === 'function') window.save();
     else window.dndApp?.saveLocal?.();
     updatePayrollInputMode();
@@ -227,7 +293,8 @@
     const vatEligibleSpend = Math.max(0, direct + operatingOther) * safePercent(state.inputVatShare) / 100;
     const vatInput = vatEligibleSpend * number(state.vatRate) / 100;
     const vatPayable = Math.max(0, vatOutput - vatInput);
-    return { revenue, direct, payroll, operatingOther, operating, gross, grossMargin: revenue ? gross / revenue * 100 : 0, operatingProfit, pph, net, plannedProfit, profitGap, profitAchievement, vatOutput, vatEligibleSpend, vatInput, vatPayable, vatCreditCarry: Math.max(0, vatInput - vatOutput) };
+    const employeePph21 = estimateEmployeePph21(payroll);
+    return { revenue, direct, payroll, employeePph21, operatingOther, operating, gross, grossMargin: revenue ? gross / revenue * 100 : 0, operatingProfit, pph, net, plannedProfit, profitGap, profitAchievement, vatOutput, vatEligibleSpend, vatInput, vatPayable, vatCreditCarry: Math.max(0, vatInput - vatOutput) };
   }
 
   function setCostMode(group, key, nextMode) {
@@ -370,6 +437,10 @@
     if (directHost && !directHost.children.length) costFields('projectionDirectCosts', 'direct', directLabels);
     if (operatingHost && !operatingHost.children.length) costFields('projectionOperatingCosts', 'operating', operatingLabels);
     const calc = calculations();
+    Object.entries(calc.employeePph21.byId).forEach(([id, value]) => {
+      const cell = [...(input('projectionPayrollRoster')?.querySelectorAll('[data-employee-pph21]') || [])].find(node => node.dataset.employeePph21 === id);
+      if (cell) cell.textContent = money(value.tax);
+    });
     renderCostPreviews();
     renderDirectCostComposition();
     input('projectionKpiRevenue').textContent = money(calc.revenue);
@@ -388,11 +459,16 @@
     input('projectionSummary').innerHTML = [
       ['Target omzet (di luar PPN)', calc.revenue], ['Total biaya langsung', -calc.direct], ['Laba kotor', calc.gross, true],
       ['Gaji, THR dan iuran pemberi kerja', -calc.payroll.total], ['Biaya operasional lainnya', -calc.operatingOther], ['Total biaya operasional', -calc.operating], ['Laba operasional', calc.operatingProfit], ['PPh final konstruksi', -calc.pph],
+      [localStorage.getItem('dnd_language') === 'en' ? 'Employee PPh 21 (withheld from payroll)' : 'Estimasi PPh 21 pegawai (dipotong dari gaji)', calc.employeePph21.total, true],
       ['Laba bersih proyeksi', calc.net, true], ['Rencana laba bersih (' + displayNumber(state.profitTargetRate) + '% omzet)', calc.plannedProfit], ['Selisih proyeksi terhadap rencana', calc.profitGap]
     ].map(([label, value, emphasis]) => `<div class="projection-summary-row${emphasis ? ' emphasis' : ''}"><span>${label}</span><strong>${money(value)}</strong></div>`).join('');
+    const pph21Note = input('projectionPph21Note');
+    if (pph21Note) pph21Note.textContent = localStorage.getItem('dnd_language') === 'en'
+      ? 'Annual estimate using base salary, fixed allowances and the simulated THR reserve, less job expense and each employee’s PTKP status (default TK/0). It is not added to employer operating costs. Other taxable benefits, pension contributions, zakat, income from other employers, and any eligible 2026 government-borne PPh 21 incentive are not included.'
+      : 'Estimasi tahunan dari gaji pokok, tunjangan tetap, dan cadangan THR simulasi, dikurangi biaya jabatan dan PTKP masing-masing pegawai (default TK/0). Nilai ini tidak ditambahkan ke biaya operasional pemberi kerja. Belum mencakup natura/benefit kena pajak lain, iuran pensiun, zakat, penghasilan dari pemberi kerja lain, dan insentif PPh 21 ditanggung pemerintah 2026 jika memenuhi syarat.';
     input('projectionTaxDetail').innerHTML = [
       ['Tarif PPh final', `${number(state.pphRate).toLocaleString('id-ID')}%`], ['Dasar omzet PPh final', money(calc.revenue)],
-      ['Estimasi PPh final', money(calc.pph)], ['PPN keluaran', money(calc.vatOutput)],
+      ['Estimasi PPh final', money(calc.pph)], [localStorage.getItem('dnd_language') === 'en' ? 'Estimated employee PPh 21' : 'Estimasi PPh 21 pegawai', money(calc.employeePph21.total)], ['PPN keluaran', money(calc.vatOutput)],
       ['Dasar biaya PPN masukan (di luar gaji)', money(calc.vatEligibleSpend)], ['Estimasi kredit PPN masukan', money(calc.vatInput)], ['Estimasi PPN yang disetor', money(calc.vatPayable)],
       ['Sisa kredit PPN masukan (jika ada)', money(calc.vatCreditCarry)]
     ].map(([label, value]) => `<div class="projection-taxline"><span>${label}</span><strong>${value}</strong></div>`).join('');

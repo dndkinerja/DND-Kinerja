@@ -514,6 +514,7 @@
     input('projectionRevenue').addEventListener('input', () => { state.revenue = number(input('projectionRevenue').value); persist(); renderBusinessProjection(); });
     input('projectionYear').addEventListener('input', () => { state.year = Math.max(2020, Math.min(2100, number(input('projectionYear').value) || new Date().getFullYear())); persist(); });
     input('saveAnnualPlan')?.addEventListener('click', saveAnnualPlan);
+    input('dashboardTrendMetric')?.addEventListener('change', renderDashboardBusinessTrend);
     input('realizationYear')?.addEventListener('change', renderRealizationPage);
     ['Revenue','Gross','Operating','Net','Q1','Q2','Q3','Q4'].forEach(suffix => { const field = input('actual'+suffix); bindLocaleInput(field); field?.addEventListener('input', renderRealizationComparison); });
     input('saveRealization')?.addEventListener('click', saveRealization);
@@ -537,7 +538,7 @@
         const year = del.dataset.planDelete;
         if (!window.confirm('Hapus target tahun '+year+'?')) return;
         const plans = projectionPlanList(); delete plans[year]; saveProjectionPlanList(plans);
-        renderProjectionPlanControls(); updateDashboardPlanMonitor();
+        renderProjectionPlanControls(); updateDashboardPlanMonitor(); renderDashboardBusinessTrend();
       }
     });
     input('saveRealization')?.addEventListener('click', saveRealization);
@@ -602,7 +603,7 @@
     if (!Object.keys(plans).length) { const status = input('projectionPlanStatus'); if (status) status.textContent = 'Belum ada target yang tersimpan.'; return; }
     if (!window.confirm('Hapus semua target proyeksi yang tersimpan?')) return;
     if (!saveProjectionPlanList({})) { window.alert('Daftar target belum dapat dihapus.'); return; }
-    renderProjectionPlanControls(); updateDashboardPlanMonitor(); const status = input('projectionPlanStatus'); if (status) status.textContent = 'Semua target proyeksi telah dihapus.';
+    renderProjectionPlanControls(); updateDashboardPlanMonitor(); renderDashboardBusinessTrend(); const status = input('projectionPlanStatus'); if (status) status.textContent = 'Semua target proyeksi telah dihapus.';
   }  function activateProjectionYear() {
     const raw = Math.trunc(number(input('projectionYearQuick')?.value));
     if (!raw || raw < 2020 || raw > 2100) { window.alert('Masukkan tahun antara 2020 sampai 2100.'); return false; }
@@ -625,7 +626,7 @@
     if (plans[year] && !window.confirm('Target '+year+' sudah tersimpan. Perbarui dengan asumsi saat ini?')) return;
     plans[year] = plan;
     if (!saveProjectionPlanList(plans)) { window.alert('Target belum dapat disimpan.'); return; }
-    renderProjectionPlanControls(); updateDashboardPlanMonitor(); renderRealizationPage();
+    renderProjectionPlanControls(); updateDashboardPlanMonitor(); renderDashboardBusinessTrend(); renderRealizationPage();
     const status = input('projectionPlanStatus'); if (status) status.textContent = 'Target bisnis tahun ' + year + ' berhasil disimpan. Ubah asumsi lalu tekan Perbarui target untuk mengeditnya.';
     window.alert('Target bisnis tahun '+year+' berhasil disimpan.');
   }
@@ -639,7 +640,21 @@
     state.costModes = { direct: { ...defaults.costModes.direct, ...(plan.inputs.costModes?.direct || {}) }, operating: { ...defaults.costModes.operating, ...(plan.inputs.costModes?.operating || {}) } };
     persist(); setInputs(); renderBusinessProjection(); renderProjectionPlanControls();
   }
-  function renderRealizationPage() {
+  function renderDashboardBusinessTrend() {
+    const svg = input('dashboardBusinessTrendChart'); if (!svg) return;
+    const metric = input('dashboardTrendMetric')?.value || 'revenue', plans = projectionPlanList(), actuals = actualList();
+    const years = [...new Set([...Object.keys(plans),...Object.keys(actuals)].filter(year=>/^20\d{2}$|^2100$/.test(year)))].sort((a,b)=>Number(a)-Number(b));
+    const note = input('dashboardBusinessTrendNote');
+    if (!years.length) { svg.setAttribute('viewBox','0 0 900 320'); svg.style.width='100%'; svg.innerHTML='<text x="450" y="160" text-anchor="middle" class="dashboard-trend-empty">Simpan target proyeksi dan input realisasi untuk melihat perkembangan usaha.</text>'; if(note)note.textContent='Data akan tampil setelah target proyeksi dan realisasi tahunan tersimpan.'; return; }
+    const data = years.map(year=>({year,target:plans[year]?.metrics?.[metric],actual:actuals[year]?.[metric]}));
+    const values = data.flatMap(row=>[row.target,row.actual]).filter(value=>value!==undefined&&value!==null&&Number.isFinite(Number(value))).map(Number),maxValue=Math.max(1,...values),height=340,margin={top:25,right:32,bottom:48,left:92},availableWidth=Math.max(760,(svg.parentElement?.clientWidth||900)-10),width=Math.max(availableWidth,margin.left+margin.right+Math.max(1,years.length-1)*112+120),plotHeight=height-margin.top-margin.bottom,plotWidth=width-margin.left-margin.right;
+    const xAt=index=>years.length===1?margin.left+plotWidth/2:margin.left+index*plotWidth/(years.length-1),yAt=value=>margin.top+plotHeight-(Number(value)/maxValue*plotHeight),compact=value=>'Rp '+new Intl.NumberFormat('id-ID',{notation:'compact',maximumFractionDigits:1}).format(value),fullMoney=value=>money(Number(value)||0);
+    let grid='',xLabels='';for(let step=0;step<=4;step++){const value=maxValue*step/4,y=yAt(value);grid+=`<line x1="${margin.left}" y1="${y}" x2="${width-margin.right}" y2="${y}" class="dashboard-trend-grid"/><text x="${margin.left-10}" y="${y+4}" text-anchor="end" class="dashboard-trend-axis-label">${compact(value)}</text>`}years.forEach((year,index)=>{const x=xAt(index);xLabels+=`<line x1="${x}" y1="${margin.top+plotHeight}" x2="${x}" y2="${margin.top+plotHeight+5}" class="dashboard-trend-grid"/><text x="${x}" y="${height-14}" text-anchor="middle" class="dashboard-trend-year-label">${year}</text>`});
+    const makePath=key=>{let path='',active=false;data.forEach((row,index)=>{const value=row[key];if(value===undefined||value===null||!Number.isFinite(Number(value))){active=false;return}path+=(active?' L':' M')+xAt(index)+' '+yAt(value);active=true});return path};
+    const points=(key,cls,label)=>data.map((row,index)=>{const value=row[key];if(value===undefined||value===null||!Number.isFinite(Number(value)))return'';const x=xAt(index),y=yAt(value);return `<circle cx="${x}" cy="${y}" r="5" class="${cls}"><title>${label} ${row.year}: ${fullMoney(value)}</title></circle>`}).join('');
+    svg.setAttribute('viewBox',`0 0 ${width} ${height}`);svg.style.width=width+'px';svg.innerHTML=grid+xLabels+`<path d="${makePath('target')}" class="dashboard-trend-target-line"/><path d="${makePath('actual')}" class="dashboard-trend-actual-line"/>`+points('target','dashboard-trend-target-point','Proyeksi')+points('actual','dashboard-trend-actual-point','Realisasi');
+    const actualYears=data.filter(row=>row.actual!==undefined&&row.actual!==null).length;if(note)note.textContent=actualYears?'Grafik mencakup '+years.length+' tahun; realisasi sudah diinput untuk '+actualYears+' tahun. Arahkan kursor ke titik untuk melihat nilai lengkap.':'Target proyeksi tersedia untuk '+years.length+' tahun. Input realisasi tahunan agar garis realisasi ikut terlihat.';
+  }  function renderRealizationPage() {
     const yearField = input('realizationYear'); if (!yearField) return;
     const plans = projectionPlanList(), savedActuals = actualList(), currentYear = new Date().getFullYear();
     const years = [...new Set([currentYear, ...Object.keys(plans), ...Object.keys(savedActuals)].map(Number).filter(year => year >= 2020 && year <= 2100))].sort((a,b) => b-a);
@@ -677,7 +692,7 @@
     ['revenue','gross','operating','net','q1','q2','q3','q4'].forEach(key => { const field = input('actual'+key[0].toUpperCase()+key.slice(1)); record[key] = field ? Math.max(0,number(field.value)) : 0; });
     const actuals = actualList(); actuals[String(year)] = record;
     if (!saveActualList(actuals)) { window.alert('Realisasi belum dapat disimpan.'); return; }
-    renderRealizationPage(); updateDashboardPlanMonitor(); window.dndApp?.toast?.('Realisasi tahun '+year+' berhasil disimpan.');
+    renderRealizationPage(); updateDashboardPlanMonitor(); renderDashboardBusinessTrend(); window.dndApp?.toast?.('Realisasi tahun '+year+' berhasil disimpan.');
   }  function updateDashboardPlanMonitor() {
     const root = input('planActualMonitor'); if (!root) return;
     const year = String(new Date().getFullYear()), plan = projectionPlanList()[year], actual = actualsForYear(year), status = input('planActualYearLabel');
@@ -694,8 +709,8 @@
     const legend = input('planActualLegend'); if (legend) legend.style.display = plan ? 'flex' : 'none';
   }
   window.saveAnnualPlan = saveAnnualPlan; window.loadAnnualPlan = loadAnnualPlan; window.renderRealizationPage = renderRealizationPage; window.saveRealization = saveRealization; window.updateDashboardPlanMonitor = updateDashboardPlanMonitor;
-  window.renderBusinessProjection = renderBusinessProjection;
+  window.renderBusinessProjection = renderBusinessProjection; window.renderDashboardBusinessTrend = renderDashboardBusinessTrend;
   window.getProjectedNetProfit = () => { const value = calculations().net; return Number.isFinite(value) ? value : 0; };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { setInputs(); bind(); renderBusinessProjection(); });
-  else { setInputs(); bind(); renderBusinessProjection(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { setInputs(); bind(); renderBusinessProjection(); renderDashboardBusinessTrend(); });
+  else { setInputs(); bind(); renderBusinessProjection(); renderDashboardBusinessTrend(); }
 })();

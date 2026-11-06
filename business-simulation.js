@@ -4,7 +4,7 @@
     year: new Date().getFullYear(), revenue: 0, quarters: [20, 25, 25, 30],
     profitTargetRate: 0, pphRate: 1.75, vatRate: 11, inputVatShare: 80,
     direct: { materials: 0, labor: 0, subcontract: 0, equipment: 0, logistics: 0, otherDirect: 0 },
-    operating: { office: 0, admin: 0, marketing: 0, depreciation: 0, otherOperating: 0 }, costModes: { direct: { materials: 'amount', labor: 'amount', subcontract: 'amount', equipment: 'amount', logistics: 'amount', otherDirect: 'amount' }, operating: { office: 'amount', admin: 'amount', marketing: 'amount', depreciation: 'amount', otherOperating: 'amount' } }, payroll: { annualSalary: 0, annualThr: 0, annualEmployerBenefits: 0 }
+    operating: { office: 0, admin: 0, marketing: 0, depreciation: 0, otherOperating: 0 }, costModes: { direct: { materials: 'amount', labor: 'amount', subcontract: 'amount', equipment: 'amount', logistics: 'amount', otherDirect: 'amount' }, operating: { office: 'amount', admin: 'amount', marketing: 'amount', depreciation: 'amount', otherOperating: 'amount' } }, payroll: { annualSalary: 0, annualThr: 0, annualEmployerBenefits: 0, thrMode: 'automatic', thrMultiplier: 1 }
   };
   const directLabels = [
     ['materials', 'Material dan bahan konstruksi'], ['labor', 'Tenaga kerja lapangan'],
@@ -64,7 +64,9 @@
       const payroll = {
         annualSalary: oldPayroll.annualSalary !== undefined ? oldPayroll.annualSalary : headcount * number(oldPayroll.monthlySalary) * 12 + extraSalary,
         annualThr: oldPayroll.annualThr !== undefined ? oldPayroll.annualThr : headcount * number(oldPayroll.annualAllowance),
-        annualEmployerBenefits: oldPayroll.annualEmployerBenefits !== undefined ? oldPayroll.annualEmployerBenefits : headcount * number(oldPayroll.monthlyEmployerBenefits) * 12
+        annualEmployerBenefits: oldPayroll.annualEmployerBenefits !== undefined ? oldPayroll.annualEmployerBenefits : headcount * number(oldPayroll.monthlyEmployerBenefits) * 12,
+        thrMode: ['automatic', 'multiplier', 'manual'].includes(oldPayroll.thrMode) ? oldPayroll.thrMode : defaults.payroll.thrMode,
+        thrMultiplier: oldPayroll.thrMultiplier !== undefined ? number(oldPayroll.thrMultiplier) : defaults.payroll.thrMultiplier
       };
       return {
         ...defaults, ...saved,
@@ -104,11 +106,16 @@
   }
   function payrollTotals() {
     const roster = payrollRoster();
-    if (!roster.configured) return { salary: number(state.payroll.annualSalary), allowance: number(state.payroll.annualThr), employerBenefits: number(state.payroll.annualEmployerBenefits), source: 'manual' };
+    const mode = ['automatic', 'multiplier', 'manual'].includes(state.payroll.thrMode) ? state.payroll.thrMode : 'automatic';
+    const multiplier = number(state.payroll.thrMultiplier ?? 1);
+    if (!roster.configured) {
+      const salary = number(state.payroll.annualSalary), monthlyWage = salary / 12;
+      const allowance = mode === 'manual' ? number(state.payroll.annualThr) : monthlyWage * (mode === 'multiplier' ? multiplier : 1);
+      return { salary, allowance, employerBenefits: number(state.payroll.annualEmployerBenefits), monthlyWage, thrMode: mode, thrMultiplier: multiplier, source: 'manual' };
+    }
     const year = Math.trunc(number(state.year)) || new Date().getFullYear();
     const yearStart = new Date(year, 0, 1), yearEnd = new Date(year, 11, 31);
-    const yearDays = Math.round((yearEnd - yearStart) / 86400000) + 1;
-    let salary = 0, allowance = 0, employerBenefits = 0;
+    let salary = 0, employerBenefits = 0, monthlyWage = 0;
     for (const employee of roster.employees) {
       const record = roster.records[String(employee.id)] || {};
       if (!record.startDate) continue;
@@ -116,7 +123,7 @@
       const end = record.resignationDate ? new Date(record.resignationDate + 'T00:00:00') : yearEnd;
       if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < yearStart || start > yearEnd || end < start) continue;
       const monthlySalary = number(record.monthlySalary), monthlyAllowance = number(record.monthlyAllowance), monthlyBenefits = number(record.monthlyEmployerBenefits);
-      let activeDays = 0;
+      monthlyWage += monthlySalary + monthlyAllowance;
       for (let month = 0; month < 12; month++) {
         const monthStart = new Date(year, month, 1), monthEnd = new Date(year, month + 1, 0);
         const activeStart = new Date(Math.max(start.getTime(), monthStart.getTime()));
@@ -124,15 +131,12 @@
         if (activeEnd < activeStart) continue;
         const days = Math.round((monthEnd - monthStart) / 86400000) + 1;
         const daysActive = Math.round((activeEnd - activeStart) / 86400000) + 1;
-        activeDays += daysActive;
         salary += (monthlySalary + monthlyAllowance) * daysActive / days;
         employerBenefits += monthlyBenefits * daysActive / days;
       }
-      const annualThrReserve = (monthlySalary + monthlyAllowance) * Math.min(1, activeDays / yearDays);
-      // THR is an estimated annual reserve, capped at one month's wage.
-      allowance += Math.min(monthlySalary + monthlyAllowance, annualThrReserve);
     }
-    return { salary, allowance, employerBenefits, source: 'roster' };
+    const allowance = mode === 'manual' ? number(state.payroll.annualThr) : monthlyWage * (mode === 'multiplier' ? multiplier : 1);
+    return { salary, allowance, employerBenefits, monthlyWage, thrMode: mode, thrMultiplier: multiplier, source: 'roster' };
   }
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   function renderPayrollRoster() {
@@ -155,14 +159,32 @@
   }
   function updatePayrollInputMode() {
     const { configured } = payrollRoster(), totals = payrollTotals();
-    [['projectionAnnualSalary', totals.salary], ['projectionAnnualThr', totals.allowance], ['projectionAnnualEmployerBenefits', totals.employerBenefits]].forEach(([id, amount]) => {
+    const english = localStorage.getItem('dnd_language') === 'en', mode = totals.thrMode;
+    const modeField = input('projectionThrMode'), multiplierWrap = input('projectionThrMultiplierWrap'), multiplierField = input('projectionThrMultiplier');
+    if (modeField && modeField.value !== mode) modeField.value = mode;
+    if (multiplierWrap) multiplierWrap.style.display = mode === 'multiplier' ? 'grid' : 'none';
+    if (multiplierField && document.activeElement !== multiplierField) multiplierField.value = displayNumber(totals.thrMultiplier);
+    const methodHelp = input('projectionThrHelp');
+    if (methodHelp) {
+      methodHelp.textContent = mode === 'manual'
+        ? (english ? 'Enter the annual THR reserve directly in the field below.' : 'Masukkan nominal cadangan THR tahunan langsung pada kolom di bawah.')
+        : mode === 'multiplier'
+          ? (english ? 'Calculation: one month wages (' + money(totals.monthlyWage) + ') × ' + displayNumber(totals.thrMultiplier) + ' = ' + money(totals.allowance) + '.' : 'Rumus: upah satu bulan (' + money(totals.monthlyWage) + ') × ' + displayNumber(totals.thrMultiplier) + ' = ' + money(totals.allowance) + '.')
+          : (english ? 'Automatic calculation: one month of base salary and fixed allowances = ' + money(totals.monthlyWage) + '.' : 'Hitung otomatis: satu bulan gaji pokok dan tunjangan tetap = ' + money(totals.monthlyWage) + '.');
+    }
+    const annualFields = [
+      ['projectionAnnualSalary', totals.salary, configured, english ? 'Annual salary and fixed allowances ' + (configured ? '(calculated)' : '(manual)') : 'Total gaji dan tunjangan tahunan ' + (configured ? '(otomatis)' : '(manual)')],
+      ['projectionAnnualThr', totals.allowance, mode !== 'manual', english ? 'Annual THR reserve ' + (mode === 'automatic' ? '(automatic: one month wages)' : mode === 'multiplier' ? '(monthly wages × multiplier)' : '(manual)') : 'Cadangan THR tahunan ' + (mode === 'automatic' ? '(otomatis: 1 bulan upah)' : mode === 'multiplier' ? '(upah bulanan × pengali)' : '(manual)')],
+      ['projectionAnnualEmployerBenefits', totals.employerBenefits, configured, english ? 'Annual employer BPJS ' + (configured ? '(calculated)' : '(manual)') : 'BPJS perusahaan tahunan ' + (configured ? '(otomatis)' : '(manual)')]
+    ];
+    annualFields.forEach(([id, amount, readOnly, labelText]) => {
       const field = input(id);
       if (!field) return;
-      field.readOnly = configured;
-      field.title = configured ? 'Dihitung dari data pegawai di atas.' : 'Mode manual: masukkan total tahunan. Isi tanggal mulai pegawai untuk beralih ke perhitungan otomatis.';
+      field.readOnly = readOnly;
+      field.title = readOnly ? (english ? 'Calculated using the selected THR method and employee payroll data.' : 'Dihitung berdasarkan metode THR terpilih dan data payroll pegawai.') : (english ? 'Enter an annual amount manually.' : 'Masukkan nominal tahunan secara manual.');
       const label = field.closest('label');
-      if (label?.firstChild?.nodeType === Node.TEXT_NODE) label.firstChild.nodeValue = id === 'projectionAnnualThr' ? 'Cadangan THR tahunan ' + (configured ? '(estimasi)' : '(manual)') : id === 'projectionAnnualEmployerBenefits' ? 'BPJS perusahaan tahunan ' + (configured ? '(otomatis)' : '(manual)') : 'Total gaji dan tunjangan tahunan ' + (configured ? '(otomatis)' : '(manual)');
-      if (configured || document.activeElement !== field) field.value = displayNumber(amount);
+      if (label?.firstChild?.nodeType === Node.TEXT_NODE) label.firstChild.nodeValue = labelText;
+      if (readOnly || document.activeElement !== field) field.value = displayNumber(amount);
     });
   }
   function savePayrollRow(event) {
@@ -292,6 +314,8 @@
     input('projectionVatRate').value = displayNumber(state.vatRate);
     input('projectionInputVatShare').value = displayNumber(state.inputVatShare);
     input('projectionProfitTargetRate').value = displayNumber(state.profitTargetRate);
+    if (input('projectionThrMode')) input('projectionThrMode').value = state.payroll.thrMode || 'automatic';
+    if (input('projectionThrMultiplier')) input('projectionThrMultiplier').value = displayNumber(state.payroll.thrMultiplier ?? 1);
     renderPayrollRoster();
     updatePayrollInputMode();
     costFields('projectionDirectCosts', 'direct', directLabels);
@@ -301,10 +325,16 @@
   function renderBreakdown(calc) {
     const rows = [];
     directLabels.forEach(([key, label]) => rows.push({ label, category: 'Biaya langsung', amount: costAmount('direct', key), note: costBasisNote('direct', key) + ' Dikurangkan untuk memperoleh laba kotor.' }));
-    const payrollNote = calc.payroll.source === 'roster' ? 'Dihitung dari gaji bulanan dan hari kerja aktif pada tahun proyeksi.' : 'Total tahunan diisi manual karena belum ada tanggal mulai bekerja pada daftar pegawai.';
-    rows.push({ label: 'Gaji pokok dan tunjangan tetap', category: 'Gaji karyawan', amount: calc.payroll.salary, note: payrollNote });
-    rows.push({ label: 'Cadangan THR tahunan', category: 'Gaji karyawan', amount: calc.payroll.allowance, note: calc.payroll.source === 'roster' ? 'Estimasi prorata masa kerja, maksimal satu bulan upah per tahun.' : payrollNote });
-    rows.push({ label: 'Iuran BPJS bagian pemberi kerja', category: 'Gaji karyawan', amount: calc.payroll.employerBenefits, note: payrollNote });
+    const english = localStorage.getItem('dnd_language') === 'en';
+    const payrollNote = calc.payroll.source === 'roster' ? (english ? 'Calculated from monthly wages and active work dates in the selected year.' : 'Dihitung dari gaji bulanan dan hari kerja aktif pada tahun proyeksi.') : (english ? 'Annual payroll entered manually because employee start dates are not configured.' : 'Total tahunan diisi manual karena belum ada tanggal mulai bekerja pada daftar pegawai.');
+    const thrNote = calc.payroll.thrMode === 'manual'
+      ? (english ? 'Annual THR reserve entered manually.' : 'Cadangan THR tahunan diisi manual.')
+      : calc.payroll.thrMode === 'multiplier'
+        ? (english ? 'Monthly wages ' + money(calc.payroll.monthlyWage) + ' × ' + displayNumber(calc.payroll.thrMultiplier) + ' = ' + money(calc.payroll.allowance) + '.' : 'Upah bulanan ' + money(calc.payroll.monthlyWage) + ' × ' + displayNumber(calc.payroll.thrMultiplier) + ' = ' + money(calc.payroll.allowance) + '.')
+        : (english ? 'Automatic reserve equals one month of base salary and fixed allowances: ' + money(calc.payroll.monthlyWage) + '.' : 'Otomatis sebesar satu bulan gaji pokok dan tunjangan tetap: ' + money(calc.payroll.monthlyWage) + '.');
+    rows.push({ label: english ? 'Base salary and fixed allowances' : 'Gaji pokok dan tunjangan tetap', category: english ? 'Employee compensation' : 'Gaji karyawan', amount: calc.payroll.salary, note: payrollNote });
+    rows.push({ label: english ? 'Annual THR reserve' : 'Cadangan THR tahunan', category: english ? 'Employee compensation' : 'Gaji karyawan', amount: calc.payroll.allowance, note: thrNote });
+    rows.push({ label: english ? 'Employer BPJS contributions' : 'Iuran BPJS bagian pemberi kerja', category: english ? 'Employee compensation' : 'Gaji karyawan', amount: calc.payroll.employerBenefits, note: payrollNote });
     operatingLabels.forEach(([key, label]) => rows.push({ label, category: 'Operasional lainnya', amount: costAmount('operating', key), note: costBasisNote('operating', key) + ' Dikurangkan dalam biaya operasional.' }));
     rows.push({ label: 'Laba kotor', category: 'Hasil usaha', amount: calc.gross, note: 'Omzet sebelum PPN dikurangi biaya langsung pekerjaan.' });
     rows.push({ label: 'Laba operasional', category: 'Hasil usaha', amount: calc.operatingProfit, note: 'Laba kotor dikurangi seluruh biaya operasional.' });
@@ -352,7 +382,9 @@
     const profitPreview = input('projectionProfitTargetPreview');
     if (profitPreview) profitPreview.textContent = 'Rencana laba bersih tahunan: ' + money(calc.plannedProfit) + '.';
     updatePayrollInputMode();
-    input('projectionPayrollTotal').textContent = 'Total biaya payroll tahunan: ' + money(calc.payroll.total) + ' — gaji/tunjangan ' + money(calc.payroll.salary) + ', THR ' + money(calc.payroll.allowance) + ', iuran BPJS perusahaan ' + money(calc.payroll.employerBenefits) + '.';
+    input('projectionPayrollTotal').textContent = localStorage.getItem('dnd_language') === 'en'
+      ? 'Total annual payroll: ' + money(calc.payroll.total) + ' — salary/allowances ' + money(calc.payroll.salary) + ', THR reserve ' + money(calc.payroll.allowance) + ', employer BPJS ' + money(calc.payroll.employerBenefits) + '.'
+      : 'Total biaya payroll tahunan: ' + money(calc.payroll.total) + ' — gaji/tunjangan ' + money(calc.payroll.salary) + ', THR ' + money(calc.payroll.allowance) + ', iuran BPJS perusahaan ' + money(calc.payroll.employerBenefits) + '.';
     input('projectionSummary').innerHTML = [
       ['Target omzet (di luar PPN)', calc.revenue], ['Total biaya langsung', -calc.direct], ['Laba kotor', calc.gross, true],
       ['Gaji, THR dan iuran pemberi kerja', -calc.payroll.total], ['Biaya operasional lainnya', -calc.operatingOther], ['Total biaya operasional', -calc.operating], ['Laba operasional', calc.operatingProfit], ['PPh final konstruksi', -calc.pph],
@@ -370,7 +402,19 @@
   }
 
   function bind() {
-    ['projectionYear', 'projectionRevenue', 'projectionProfitTargetRate', 'projectionQ1', 'projectionQ2', 'projectionQ3', 'projectionQ4', 'projectionPphRate', 'projectionVatRate', 'projectionInputVatShare', 'projectionAnnualSalary', 'projectionAnnualThr', 'projectionAnnualEmployerBenefits'].forEach(id => bindLocaleInput(input(id)));
+    ['projectionYear', 'projectionRevenue', 'projectionProfitTargetRate', 'projectionQ1', 'projectionQ2', 'projectionQ3', 'projectionQ4', 'projectionPphRate', 'projectionVatRate', 'projectionInputVatShare', 'projectionAnnualSalary', 'projectionAnnualThr', 'projectionAnnualEmployerBenefits', 'projectionThrMultiplier'].forEach(id => bindLocaleInput(input(id)));
+    input('projectionThrMode')?.addEventListener('change', () => {
+      const nextMode = input('projectionThrMode').value;
+      const previousMode = state.payroll.thrMode || 'automatic';
+      const previousAmount = payrollTotals().allowance;
+      if (nextMode === 'manual' && previousMode !== 'manual' && !(number(state.payroll.annualThr) > 0)) state.payroll.annualThr = previousAmount;
+      state.payroll.thrMode = ['automatic', 'multiplier', 'manual'].includes(nextMode) ? nextMode : 'automatic';
+      persist(); updatePayrollInputMode(); renderBusinessProjection();
+    });
+    input('projectionThrMultiplier')?.addEventListener('input', () => {
+      state.payroll.thrMultiplier = number(input('projectionThrMultiplier').value);
+      persist(); renderBusinessProjection();
+    });
     input('projectionRevenue').addEventListener('input', () => { state.revenue = number(input('projectionRevenue').value); persist(); renderBusinessProjection(); });
     input('projectionYear').addEventListener('input', () => { state.year = Math.max(2020, Math.min(2100, number(input('projectionYear').value) || new Date().getFullYear())); persist(); });
     input('saveAnnualPlan')?.addEventListener('click', saveAnnualPlan);
@@ -406,7 +450,8 @@
       state[key] = safePercent(input(id).value); persist(); renderBusinessProjection();
     }));
     [['projectionAnnualSalary', 'annualSalary'], ['projectionAnnualThr', 'annualThr'], ['projectionAnnualEmployerBenefits', 'annualEmployerBenefits']].forEach(([id, key]) => input(id).addEventListener('input', () => {
-      if (payrollRoster().configured) return;
+      if (key === 'annualThr' && state.payroll.thrMode !== 'manual') return;
+      if (key !== 'annualThr' && payrollRoster().configured) return;
       state.payroll[key] = number(input(id).value); persist(); renderBusinessProjection();
     }));
     input('projectionReset').addEventListener('click', () => {

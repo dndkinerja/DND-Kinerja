@@ -202,15 +202,33 @@
     const host = input('projectionPayrollRoster');
     if (!host) return;
     const { employees, records } = payrollRoster();
-    const english = localStorage.getItem('dnd_language') === 'en', signature = [english ? 'en' : 'id', ...employees.map(employee => [employee.id, employee.name, employee.title].join(':'))].join('|');
+    const english = localStorage.getItem('dnd_language') === 'en';
+    const calculatePph21 = localStorage.getItem('dnd_calculate_employee_pph21') !== 'false';
+    const signature = [english ? 'en' : 'id', calculatePph21 ? 'pph21-on' : 'pph21-off', ...employees.map(employee => [employee.id, employee.name, employee.title].join(':'))].join('|');
     if (host.dataset.rosterSignature === signature) return;
     host.dataset.rosterSignature = signature;
+    const showPph21 = localStorage.getItem('dnd_show_employee_pph21') === 'true';
+    const estimates = calculatePph21 ? estimateEmployeePph21() : { byId: {} };
+    const control = '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 10px;padding:11px 13px;border:1px solid #cce7e3;border-radius:10px;background:#f2f8f7">' +
+      '<label style="display:flex;align-items:center;gap:8px;margin:0;font-size:12px;font-weight:700;color:#244654"><input type="checkbox" id="projectionCalculateEmployeePph21" '+(calculatePph21?'checked':'')+' style="width:18px;height:18px;accent-color:#087e80">'+(english?'Include employee PPh 21 calculation':'Sertakan perhitungan PPh 21 pegawai')+'</label>' +
+      '<label style="display:flex;align-items:center;gap:8px;margin:0;font-size:12px;font-weight:700;color:#244654"><input type="checkbox" id="projectionShowEmployeePph21" '+(showPph21 && calculatePph21?'checked':'')+' '+(!calculatePph21?'disabled':'')+' style="width:18px;height:18px;accent-color:#087e80">'+(english?'Show annual PPh 21 per employee':'Tampilkan PPh 21 tahunan per pegawai')+'</label>' +
+      '<small style="font-size:10px;color:#71818a">'+(english?'PPh 21 is withheld from employee income.':'PPh 21 dipotong dari penghasilan pegawai.')+'</small></div>';
+    const applyPphVisibility = visible => host.querySelectorAll('.employee-pph21-column').forEach(cell => { cell.style.display = visible ? 'table-cell' : 'none'; });
+    const bindPphControls = () => {
+      host.querySelector('#projectionCalculateEmployeePph21')?.addEventListener('change', event => {
+        localStorage.setItem('dnd_calculate_employee_pph21', String(event.target.checked));
+        renderBusinessProjection();
+      });
+      host.querySelector('#projectionShowEmployeePph21')?.addEventListener('change', event => {
+        localStorage.setItem('dnd_show_employee_pph21', String(event.target.checked));
+        applyPphVisibility(event.target.checked && calculatePph21);
+      });
+    };
     if (!employees.length) {
-      host.innerHTML = '<p class="projection-help">Belum ada akun pegawai aktif. Tambahkan pegawai, atau isi total gaji, THR, dan BPJS manual di bawah.</p>';
+      host.innerHTML = control + '<p class="projection-help">'+(english?'No active employee accounts. You can still choose whether to include PPh 21 in the projection.':'Belum ada akun pegawai aktif. Anda tetap dapat memilih apakah PPh 21 disertakan dalam proyeksi.')+'</p>';
+      bindPphControls();
       return;
     }
-    const showPph21 = localStorage.getItem('dnd_show_employee_pph21') === 'true', estimates = estimateEmployeePph21();
-    const control = '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 10px;padding:11px 13px;border:1px solid #cce7e3;border-radius:10px;background:#f2f8f7"><label style="display:flex;align-items:center;gap:9px;margin:0;font-size:12px;font-weight:700;color:#244654"><input type="checkbox" id="projectionShowEmployeePph21" '+(showPph21?'checked':'')+' style="width:18px;height:18px;accent-color:#087e80">'+(english?'Show annual employee PPh 21':'Tampilkan PPh 21 pegawai per tahun')+'</label><small style="font-size:10px;color:#71818a">'+(english?'Annual estimate. PPh 21 is withheld from employee income.':'Estimasi setahun; PPh 21 dipotong dari penghasilan pegawai.')+'</small></div>';
     host.innerHTML = control + '<div class="tablewrap" style="max-height:360px;overflow:auto"><table style="min-width:1040px;font-size:10px"><thead><tr><th>'+(english?'Employee':'Pegawai')+'</th><th>'+(english?'PTKP status':'Status PTKP')+'</th><th>'+(english?'Start date':'Mulai bekerja')+'</th><th>'+(english?'Resignation date (optional)':'Tanggal resign (opsional)')+'</th><th>'+(english?'Base salary / month':'Gaji pokok / bulan')+'</th><th>'+(english?'Fixed allowance / month':'Tunjangan tetap / bulan')+'</th><th>'+(english?'Employer BPJS / month':'BPJS perusahaan / bulan')+'</th><th class="employee-pph21-column">'+(english?'Estimated PPh 21 / year':'Estimasi PPh 21 / tahun')+'</th></tr></thead><tbody>' + employees.map(employee => {
       const record = records[String(employee.id)] || {};
       const attr = (field, type, label) => '<input data-payroll-user="' + escapeHtml(employee.id) + '" data-payroll-field="' + field + '" type="' + type + '" aria-label="' + label + ' ' + escapeHtml(employee.name) + '" value="' + escapeHtml(type === 'date' ? (record[field] || '') : displayNumber(record[field])) + '" style="width:100%;min-width:112px;padding:7px 8px;border:1px solid #dce5e8;border-radius:7px;font:inherit;font-size:10px;color:#244654;background:#fff">';
@@ -219,9 +237,8 @@
       return '<tr><td><strong>' + escapeHtml(employee.name || employee.username || (english?'Employee':'Pegawai')) + '</strong><br><small>' + escapeHtml(employee.title || '') + '</small></td><td><select data-payroll-user="'+escapeHtml(employee.id)+'" data-payroll-field="ptkpStatus" aria-label="'+(english?'PTKP status for ':'Status PTKP ')+escapeHtml(employee.name)+'" style="min-width:80px;padding:7px 8px;border:1px solid #dce5e8;border-radius:7px;background:#fff;color:#244654">'+options+'</select></td><td>' + attr('startDate', 'date', english?'Start date':'Tanggal mulai') + '</td><td>' + attr('resignationDate', 'date', english?'Resignation date':'Tanggal resign') + '</td><td>' + attr('monthlySalary', 'text', english?'Base salary':'Gaji pokok') + '</td><td>' + attr('monthlyAllowance', 'text', english?'Fixed allowance':'Tunjangan tetap') + '</td><td>' + attr('monthlyEmployerBenefits', 'text', english?'Employer BPJS':'Iuran BPJS perusahaan') + '</td><td class="employee-pph21-column" data-employee-pph21="'+escapeHtml(employee.id)+'" style="white-space:nowrap;font-weight:700;color:#087e80">'+money(pph)+'</td></tr>';
     }).join('') + '</tbody></table></div><p class="projection-help" style="margin:7px 0 0">'+(english?'Enter each employee’s start date to include them in the projection. Salary and BPJS are prorated by active calendar days. Select each employee’s PTKP status for the annual PPh 21 estimate.':'Isi tanggal mulai bekerja untuk memasukkan pegawai ke proyeksi. Gaji dan BPJS dihitung prorata hari kalender aktif. Pilih status PTKP setiap pegawai untuk estimasi PPh 21 tahunan.')+'</p>';
     host.querySelectorAll('input[data-payroll-field]:not([type="date"])').forEach(bindLocaleInput);
-    const applyPphVisibility = visible => host.querySelectorAll('.employee-pph21-column').forEach(cell => { cell.style.display = visible ? 'table-cell' : 'none'; });
-    applyPphVisibility(showPph21);
-    host.querySelector('#projectionShowEmployeePph21')?.addEventListener('change', event => { localStorage.setItem('dnd_show_employee_pph21', String(event.target.checked)); applyPphVisibility(event.target.checked); });
+    applyPphVisibility(showPph21 && calculatePph21);
+    bindPphControls();
   }
   function updatePayrollInputMode() {
     const { configured } = payrollRoster(), totals = payrollTotals();
@@ -293,7 +310,7 @@
     const vatEligibleSpend = Math.max(0, direct + operatingOther) * safePercent(state.inputVatShare) / 100;
     const vatInput = vatEligibleSpend * number(state.vatRate) / 100;
     const vatPayable = Math.max(0, vatOutput - vatInput);
-    const employeePph21 = estimateEmployeePph21(payroll);
+    const employeePph21 = localStorage.getItem('dnd_calculate_employee_pph21') === 'false' ? { byId: {}, total: 0, year: Math.trunc(number(state.year)) || new Date().getFullYear() } : estimateEmployeePph21(payroll);
     return { revenue, direct, payroll, employeePph21, operatingOther, operating, gross, grossMargin: revenue ? gross / revenue * 100 : 0, operatingProfit, pph, net, plannedProfit, profitGap, profitAchievement, vatOutput, vatEligibleSpend, vatInput, vatPayable, vatCreditCarry: Math.max(0, vatInput - vatOutput) };
   }
 
@@ -456,19 +473,22 @@
     input('projectionPayrollTotal').textContent = localStorage.getItem('dnd_language') === 'en'
       ? 'Total annual payroll: ' + money(calc.payroll.total) + ' — salary/allowances ' + money(calc.payroll.salary) + ', THR reserve ' + money(calc.payroll.allowance) + ', employer BPJS ' + money(calc.payroll.employerBenefits) + '.'
       : 'Total biaya payroll tahunan: ' + money(calc.payroll.total) + ' — gaji/tunjangan ' + money(calc.payroll.salary) + ', THR ' + money(calc.payroll.allowance) + ', iuran BPJS perusahaan ' + money(calc.payroll.employerBenefits) + '.';
+    const includeEmployeePph21 = localStorage.getItem('dnd_calculate_employee_pph21') !== 'false';
     input('projectionSummary').innerHTML = [
       ['Target omzet (di luar PPN)', calc.revenue], ['Total biaya langsung', -calc.direct], ['Laba kotor', calc.gross, true],
       ['Gaji, THR dan iuran pemberi kerja', -calc.payroll.total], ['Biaya operasional lainnya', -calc.operatingOther], ['Total biaya operasional', -calc.operating], ['Laba operasional', calc.operatingProfit], ['PPh final konstruksi', -calc.pph],
-      [localStorage.getItem('dnd_language') === 'en' ? 'Employee PPh 21 (withheld from payroll)' : 'Estimasi PPh 21 pegawai (dipotong dari gaji)', calc.employeePph21.total, true],
+      ...(includeEmployeePph21 ? [[localStorage.getItem('dnd_language') === 'en' ? 'Employee PPh 21 (withheld from payroll)' : 'Estimasi PPh 21 pegawai (dipotong dari gaji)', calc.employeePph21.total, true]] : []),
       ['Laba bersih proyeksi', calc.net, true], ['Rencana laba bersih (' + displayNumber(state.profitTargetRate) + '% omzet)', calc.plannedProfit], ['Selisih proyeksi terhadap rencana', calc.profitGap]
     ].map(([label, value, emphasis]) => `<div class="projection-summary-row${emphasis ? ' emphasis' : ''}"><span>${label}</span><strong>${money(value)}</strong></div>`).join('');
     const pph21Note = input('projectionPph21Note');
-    if (pph21Note) pph21Note.textContent = localStorage.getItem('dnd_language') === 'en'
-      ? 'Annual estimate using base salary, fixed allowances and the simulated THR reserve, less job expense and each employee’s PTKP status (default TK/0). It is not added to employer operating costs. Other taxable benefits, pension contributions, zakat, income from other employers, and any eligible 2026 government-borne PPh 21 incentive are not included.'
-      : 'Estimasi tahunan dari gaji pokok, tunjangan tetap, dan cadangan THR simulasi, dikurangi biaya jabatan dan PTKP masing-masing pegawai (default TK/0). Nilai ini tidak ditambahkan ke biaya operasional pemberi kerja. Belum mencakup natura/benefit kena pajak lain, iuran pensiun, zakat, penghasilan dari pemberi kerja lain, dan insentif PPh 21 ditanggung pemerintah 2026 jika memenuhi syarat.';
+    if (pph21Note) pph21Note.textContent = includeEmployeePph21
+      ? (localStorage.getItem('dnd_language') === 'en'
+        ? 'Annual estimate using base salary, fixed allowances and the simulated THR reserve, less job expense and each employee’s PTKP status (default TK/0). It is not added to employer operating costs. Other taxable benefits, pension contributions, zakat, income from other employers, and any eligible 2026 government-borne PPh 21 incentive are not included.'
+        : 'Estimasi tahunan dari gaji pokok, tunjangan tetap, dan cadangan THR simulasi, dikurangi biaya jabatan dan PTKP masing-masing pegawai (default TK/0). Nilai ini tidak ditambahkan ke biaya operasional pemberi kerja. Belum mencakup natura/benefit kena pajak lain, iuran pensiun, zakat, penghasilan dari pemberi kerja lain, dan insentif PPh 21 ditanggung pemerintah 2026 jika memenuhi syarat.')
+      : (localStorage.getItem('dnd_language') === 'en' ? 'Employee PPh 21 calculation is excluded from this projection.' : 'Perhitungan PPh 21 pegawai tidak disertakan dalam proyeksi ini.');
     input('projectionTaxDetail').innerHTML = [
       ['Tarif PPh final', `${number(state.pphRate).toLocaleString('id-ID')}%`], ['Dasar omzet PPh final', money(calc.revenue)],
-      ['Estimasi PPh final', money(calc.pph)], [localStorage.getItem('dnd_language') === 'en' ? 'Estimated employee PPh 21' : 'Estimasi PPh 21 pegawai', money(calc.employeePph21.total)], ['PPN keluaran', money(calc.vatOutput)],
+      ['Estimasi PPh final', money(calc.pph)], ...(includeEmployeePph21 ? [[localStorage.getItem('dnd_language') === 'en' ? 'Estimated employee PPh 21' : 'Estimasi PPh 21 pegawai', money(calc.employeePph21.total)]] : []), ['PPN keluaran', money(calc.vatOutput)],
       ['Dasar biaya PPN masukan (di luar gaji)', money(calc.vatEligibleSpend)], ['Estimasi kredit PPN masukan', money(calc.vatInput)], ['Estimasi PPN yang disetor', money(calc.vatPayable)],
       ['Sisa kredit PPN masukan (jika ada)', money(calc.vatCreditCarry)]
     ].map(([label, value]) => `<div class="projection-taxline"><span>${label}</span><strong>${value}</strong></div>`).join('');

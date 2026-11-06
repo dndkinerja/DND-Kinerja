@@ -246,6 +246,44 @@
     }));
   }
 
+  function renderDirectCostComposition() {
+    const box = input('projectionDirectCostComposition');
+    if (!box) return;
+    const rateField = input('projectionDirectCostRate'), statusField = input('projectionDirectCostStatus'), bar = input('projectionDirectCostBar');
+    const progress = box.querySelector('[role="progressbar"]');
+    if (!rateField || !statusField || !bar || !progress) return;
+    const english = localStorage.getItem('dnd_language') === 'en';
+    const base = directCostBase(), total = totalCosts('direct');
+    const comparable = base > 0, ratio = comparable ? total / base * 100 : 0;
+    const exceeded = comparable ? total > base + 0.01 : total > 0;
+    const displayPercent = value => new Intl.NumberFormat(english ? 'en-US' : 'id-ID', { maximumFractionDigits: 1 }).format(value);
+    const barValue = comparable ? Math.min(100, Math.max(0, ratio)) : (total > 0 ? 100 : 0);
+    const color = exceeded ? '#c94c42' : '#087e80';
+    rateField.textContent = comparable ? displayPercent(ratio) + '%' : (total > 0 ? '—' : '0%');
+    rateField.style.color = color;
+    bar.style.width = barValue + '%';
+    bar.style.background = color;
+    progress.setAttribute('aria-valuenow', String(barValue));
+    progress.setAttribute('aria-valuetext', comparable ? displayPercent(ratio) + '%' : '0%');
+    box.style.borderColor = exceeded ? '#efb8af' : '#dce9e8';
+    box.style.background = exceeded ? '#fff7f5' : '#f7fbfa';
+    if (!comparable) {
+      statusField.textContent = total > 0
+        ? (english ? 'Warning: direct costs of ' + money(total) + ' exceed the available allocation of Rp 0. Enter revenue, tax, and profit targets to establish a budget.' : 'Peringatan: biaya langsung ' + money(total) + ' belum memiliki alokasi. Isi omzet, PPh final, dan target laba untuk menghitung batas biaya.')
+        : (english ? 'Enter revenue, final tax, and profit targets to calculate the available allocation.' : 'Isi omzet, PPh final, dan target laba untuk menghitung alokasi biaya yang tersedia.');
+    } else if (exceeded) {
+      statusField.textContent = english
+        ? 'Warning: direct costs exceed the available allocation by ' + displayPercent(ratio - 100) + '% (' + money(total - base) + ').'
+        : 'Peringatan: komposisi biaya langsung melebihi alokasi sebesar ' + displayPercent(ratio - 100) + '% (' + money(total - base) + ').';
+    } else if (ratio >= 99.99) {
+      statusField.textContent = english ? 'Direct costs match 100% of the available allocation.' : 'Total biaya langsung sudah sesuai dengan alokasi 100%.';
+    } else {
+      statusField.textContent = english
+        ? 'Remaining allocation: ' + displayPercent(100 - ratio) + '% (' + money(base - total) + ').'
+        : 'Sisa alokasi biaya langsung: ' + displayPercent(100 - ratio) + '% (' + money(base - total) + ').';
+    }
+  }
+
   function setInputs() {
     input('projectionYear').value = state.year;
     input('projectionRevenue').value = displayNumber(state.revenue);
@@ -303,6 +341,7 @@
     if (operatingHost && !operatingHost.children.length) costFields('projectionOperatingCosts', 'operating', operatingLabels);
     const calc = calculations();
     renderCostPreviews();
+    renderDirectCostComposition();
     input('projectionKpiRevenue').textContent = money(calc.revenue);
     input('projectionKpiGross').textContent = money(calc.gross);
     input('projectionKpiGrossMargin').textContent = `Margin kotor ${calc.grossMargin.toLocaleString('id-ID', { maximumFractionDigits: 1 })}%`;

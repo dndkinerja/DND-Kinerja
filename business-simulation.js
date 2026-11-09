@@ -558,6 +558,8 @@
     input('projectionRevenue').addEventListener('input', () => { state.revenue = number(input('projectionRevenue').value); persist(); renderBusinessProjection(); });
     input('projectionYear').addEventListener('input', () => { state.year = Math.max(2020, Math.min(2100, number(input('projectionYear').value) || new Date().getFullYear())); persist(); });
     input('saveAnnualPlan')?.addEventListener('click', saveAnnualPlan);
+    input('saveNewAnnualPlan')?.addEventListener('click', saveNewAnnualPlan);
+    input('projectionNewYear')?.addEventListener('input', updateNewPlanButton);
     input('dashboardTrendMetric')?.addEventListener('change', renderDashboardBusinessTrend);
     input('realizationYear')?.addEventListener('change', renderRealizationPage);
     ['Revenue','Gross','Operating','Net','Q1','Q2','Q3','Q4'].forEach(suffix => { const field = input('actual'+suffix); bindLocaleInput(field); field?.addEventListener('input', renderRealizationComparison); });
@@ -629,12 +631,32 @@
     const years = Object.keys(plans).filter(y => /^20\d{2}$|^2100$/.test(y)).sort((a,b) => Number(b)-Number(a));
     select.innerHTML = '<option value="">Pilih target tersimpan</option>' + years.map(y => '<option value="'+y+'">Target '+y+'</option>').join('');
     select.value = plans[year] ? year : '';
-    button.textContent = plans[year] ? 'Perbarui target '+year : 'Simpan target '+year;
-    const quick = input('projectionYearQuick'); if (quick) quick.value = year;
+    button.textContent = 'Perbarui target '+year;
+    button.disabled = !plans[year];
+    updateNewPlanButton();
     const list = input('projectionSavedPlanList');
     if (list) list.innerHTML = years.length ? '<div class="tablewrap"><table><thead><tr><th>Tahun</th><th>Target omzet</th><th>Proyeksi laba bersih</th><th>Terakhir disimpan</th><th>Aksi</th></tr></thead><tbody>' + years.map(y => { const p = plans[y]; return '<tr><td><b>'+y+'</b></td><td>'+money(p.metrics?.revenue || 0)+'</td><td>'+money(p.metrics?.net || 0)+'</td><td>'+(p.savedAt ? new Date(p.savedAt).toLocaleString('id-ID') : '—')+'</td><td><button type="button" class="btn ghost" data-plan-edit="'+y+'">Edit</button> <button type="button" class="btn danger" data-plan-delete="'+y+'">Hapus</button></td></tr>'; }).join('') + '</tbody></table></div>' : '<p style="font-size:11px;color:#82919a">Belum ada target multi-tahun yang disimpan.</p>';
   }
-  function addProjectionYear() {
+  function updateNewPlanButton() {
+    const button = input('saveNewAnnualPlan'), field = input('projectionNewYear');
+    if (!button || !field) return;
+    const year = Math.trunc(number(field.value)), valid = year >= 2020 && year <= 2100;
+    button.disabled = !valid || !!projectionPlanList()[String(year)];
+    button.title = valid && projectionPlanList()[String(year)] ? 'Tahun sudah tersimpan. Pilih tahun baru.' : '';
+  }
+  function saveNewAnnualPlan() {
+    const raw = Math.trunc(number(input('projectionNewYear')?.value));
+    if (!raw || raw < 2020 || raw > 2100) { window.alert('Masukkan tahun antara 2020 sampai 2100.'); return false; }
+    const year = String(raw), plans = projectionPlanList();
+    if (plans[year]) { window.alert('Target tahun '+year+' sudah tersimpan. Pilih tahun lain atau perbarui target melalui Asumsi Proyeksi.'); updateNewPlanButton(); return false; }
+    if (Number(state.year) !== raw) { window.alert('Tekan “Siapkan tahun” terlebih dahulu, lalu isi asumsi untuk tahun '+year+'.'); return false; }
+    plans[year] = financialSnapshot();
+    if (!saveProjectionPlanList(plans)) { window.alert('Target belum dapat disimpan.'); return false; }
+    renderProjectionPlanControls(); updateDashboardPlanMonitor(); renderDashboardBusinessTrend(); renderRealizationPage();
+    const status = input('projectionPlanStatus'); if (status) status.textContent = 'Target tahun baru '+year+' berhasil disimpan.';
+    window.alert('Target tahun baru '+year+' berhasil disimpan.');
+    return true;
+  }  function addProjectionYear() {
     const raw = Math.trunc(number(input('projectionNewYear')?.value));
     if (!raw || raw < 2020 || raw > 2100) { window.alert('Masukkan tahun antara 2020 sampai 2100.'); return false; }
     const year = String(raw), plans = projectionPlanList();
@@ -659,22 +681,15 @@
     return true;
   }
   function saveAnnualPlan() {
-    // Gunakan tahun pada kolom tambah tahun sebagai sumber utama saat menyimpan.
-    const quickYear = Math.trunc(number(input('projectionYearQuick')?.value));
-    if (quickYear >= 2020 && quickYear <= 2100 && quickYear !== Number(state.year)) {
-      state.year = quickYear;
-      input('projectionYear').value = String(quickYear);
-      persist();
-    }
     const plan = financialSnapshot(), plans = projectionPlanList(), year = String(plan.year);
-    if (plans[year] && !window.confirm('Target '+year+' sudah tersimpan. Perbarui dengan asumsi saat ini?')) return;
+    if (!plans[year]) { window.alert('Tahun '+year+' belum tersimpan. Tambahkan tahun baru dari panel atas, atau pilih target yang sudah tersimpan.'); return; }
+    if (!window.confirm('Perbarui target '+year+' dengan asumsi saat ini?')) return;
     plans[year] = plan;
     if (!saveProjectionPlanList(plans)) { window.alert('Target belum dapat disimpan.'); return; }
     renderProjectionPlanControls(); updateDashboardPlanMonitor(); renderDashboardBusinessTrend(); renderRealizationPage();
-    const status = input('projectionPlanStatus'); if (status) status.textContent = 'Target bisnis tahun ' + year + ' berhasil disimpan. Ubah asumsi lalu tekan Perbarui target untuk mengeditnya.';
-    window.alert('Target bisnis tahun '+year+' berhasil disimpan.');
-  }
-  function loadAnnualPlan() {
+    const status = input('projectionPlanStatus'); if (status) status.textContent = 'Target bisnis tahun ' + year + ' berhasil diperbarui.';
+    window.alert('Target bisnis tahun '+year+' berhasil diperbarui.');
+  }  function loadAnnualPlan() {
     const select = input('projectionSavedPlans'), plan = select && projectionPlanList()[select.value];
     if (!plan) return;
     state = { ...structuredClone(defaults), ...structuredClone(plan.inputs) };

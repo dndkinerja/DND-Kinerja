@@ -198,9 +198,42 @@
     return { byId, total: Object.values(byId).reduce((sum, row) => sum + row.tax, 0), year };
   }
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+  let payrollUnlocked = false;
+  function updatePayrollGate() {
+    const host = input('projectionPayrollRoster'), button = input('togglePayrollAccess');
+    if (host) host.hidden = !payrollUnlocked;
+    if (button) {
+      const english = localStorage.getItem('dnd_language') === 'en';
+      button.textContent = payrollUnlocked ? (english ? '🔒 Hide salary data' : '🔒 Sembunyikan data gaji') : (english ? '🔐 Open salary data' : '🔐 Buka data gaji');
+      button.setAttribute('aria-expanded', String(payrollUnlocked));
+      button.onclick = () => {
+        if (payrollUnlocked) { payrollUnlocked = false; const rosterHost = input('projectionPayrollRoster'); if (rosterHost) rosterHost.dataset.rosterSignature = ''; renderPayrollRoster(); updatePayrollGate(); return; }
+        const english = localStorage.getItem('dnd_language') === 'en';
+        window.modalForm(english ? 'Unlock salary data' : 'Buka data gaji', `<form id="payrollUnlockForm"><p class="projection-help">${english ? 'Enter your current account password to view employee salary data.' : 'Masukkan password akun yang sedang masuk untuk melihat data gaji pegawai.'}</p><label class="field">${english ? 'Account password' : 'Password akun'}</label><input class="input full" id="payrollUnlockPassword" type="password" autocomplete="current-password" required><div class="formactions"><button type="button" class="btn ghost" onclick="closeModal()">${english ? 'Cancel' : 'Batal'}</button><button class="btn" type="submit">${english ? 'Unlock' : 'Buka'}</button></div></form>`);
+        input('payrollUnlockForm').onsubmit = async event => {
+          event.preventDefault();
+          const password = input('payrollUnlockPassword').value;
+          const valid = await window.dndApp.verifyPayrollPassword(password);
+          if (!valid) { window.dndApp.toast(english ? 'Password is incorrect or could not be verified.' : 'Password salah atau tidak dapat diverifikasi.'); return; }
+          payrollUnlocked = true;
+          const rosterHost = input('projectionPayrollRoster');
+          if (rosterHost) rosterHost.dataset.rosterSignature = '';
+          renderPayrollRoster();
+          window.closeModal();
+          updatePayrollGate();
+        };
+      };
+    }
+  }
   function renderPayrollRoster() {
+    updatePayrollGate();
     const host = input('projectionPayrollRoster');
     if (!host) return;
+    if (!payrollUnlocked) {
+      host.dataset.rosterSignature = '';
+      host.innerHTML = '<p class="projection-help">' + (localStorage.getItem('dnd_language') === 'en' ? 'Salary details are locked. Verify your account password to view them.' : 'Rincian gaji terkunci. Verifikasi password akun untuk melihat data.') + '</p>';
+      return;
+    }
     const { employees, records } = payrollRoster();
     const english = localStorage.getItem('dnd_language') === 'en';
     const calculatePph21 = localStorage.getItem('dnd_calculate_employee_pph21') !== 'false';
@@ -650,10 +683,11 @@
     const values = data.flatMap(row=>[row.target,row.actual]).filter(value=>value!==undefined&&value!==null&&Number.isFinite(Number(value))).map(Number),maxValue=Math.max(1,...values),height=340,margin={top:25,right:32,bottom:48,left:92},availableWidth=Math.max(760,(svg.parentElement?.clientWidth||900)-10),width=Math.max(availableWidth,margin.left+margin.right+Math.max(1,years.length-1)*112+120),plotHeight=height-margin.top-margin.bottom,plotWidth=width-margin.left-margin.right;
     const xAt=index=>years.length===1?margin.left+plotWidth/2:margin.left+index*plotWidth/(years.length-1),yAt=value=>margin.top+plotHeight-(Number(value)/maxValue*plotHeight),compact=value=>'Rp '+new Intl.NumberFormat('id-ID',{notation:'compact',maximumFractionDigits:1}).format(value),fullMoney=value=>money(Number(value)||0);
     let grid='',xLabels='';for(let step=0;step<=4;step++){const value=maxValue*step/4,y=yAt(value);grid+=`<line x1="${margin.left}" y1="${y}" x2="${width-margin.right}" y2="${y}" class="dashboard-trend-grid"/><text x="${margin.left-10}" y="${y+4}" text-anchor="end" class="dashboard-trend-axis-label">${compact(value)}</text>`}years.forEach((year,index)=>{const x=xAt(index);xLabels+=`<line x1="${x}" y1="${margin.top+plotHeight}" x2="${x}" y2="${margin.top+plotHeight+5}" class="dashboard-trend-grid"/><text x="${x}" y="${height-14}" text-anchor="middle" class="dashboard-trend-year-label">${year}</text>`});
-    const makePath=key=>{let path='',active=false;data.forEach((row,index)=>{const value=row[key];if(value===undefined||value===null||!Number.isFinite(Number(value))){active=false;return}path+=(active?' L':' M')+xAt(index)+' '+yAt(value);active=true});return path};
-    const points=(key,cls,label)=>data.map((row,index)=>{const value=row[key];if(value===undefined||value===null||!Number.isFinite(Number(value)))return'';const x=xAt(index),y=yAt(value);return `<circle cx="${x}" cy="${y}" r="5" class="${cls}"><title>${label} ${row.year}: ${fullMoney(value)}</title></circle>`}).join('');
-    svg.setAttribute('viewBox',`0 0 ${width} ${height}`);svg.style.width=width+'px';svg.innerHTML=grid+xLabels+`<path d="${makePath('target')}" class="dashboard-trend-target-line"/><path d="${makePath('actual')}" class="dashboard-trend-actual-line"/>`+points('target','dashboard-trend-target-point','Proyeksi')+points('actual','dashboard-trend-actual-point','Realisasi');
-    const actualYears=data.filter(row=>row.actual!==undefined&&row.actual!==null).length;if(note)note.textContent=actualYears?'Grafik mencakup '+years.length+' tahun; realisasi sudah diinput untuk '+actualYears+' tahun. Arahkan kursor ke titik untuk melihat nilai lengkap.':'Target proyeksi tersedia untuk '+years.length+' tahun. Input realisasi tahunan agar garis realisasi ikut terlihat.';
+    const barWidth=Math.min(28,Math.max(12,plotWidth/Math.max(1,data.length)*.2)),barGap=5,baseline=margin.top+plotHeight,seriesX=(key,index)=>xAt(index)+(key==='target'?-(barWidth/2+barGap/2):(barWidth/2+barGap/2));
+    const bars=key=>data.map((row,index)=>{const value=row[key];if(value===undefined||value===null||!Number.isFinite(Number(value)))return'';const h=Math.max(2,Number(value)/maxValue*plotHeight),x=seriesX(key,index)-barWidth/2,y=baseline-h,label=key==='target'?'Proyeksi':'Realisasi';return `<rect x="${x}" y="${y}" width="${barWidth}" height="${h}" rx="5" class="dashboard-trend-${key}-bar"><title>${label} ${row.year}: ${fullMoney(value)}</title></rect>`}).join('');
+    const smoothPath=key=>{let segments=[],segment=[];data.forEach((row,index)=>{const value=row[key];if(value===undefined||value===null||!Number.isFinite(Number(value))){if(segment.length)segments.push(segment);segment=[];return}segment.push({x:seriesX(key,index),y:yAt(value)})});if(segment.length)segments.push(segment);return segments.map(points=>{if(points.length===1)return `M ${points[0].x} ${points[0].y}`;let path=`M ${points[0].x} ${points[0].y}`;for(let i=1;i<points.length;i++){const a=points[i-1],b=points[i],dx=b.x-a.x;path+=` C ${a.x+dx*.42} ${a.y}, ${b.x-dx*.42} ${b.y}, ${b.x} ${b.y}`}return path}).join(' ')};
+    const points=(key,cls,label)=>data.map((row,index)=>{const value=row[key];if(value===undefined||value===null||!Number.isFinite(Number(value)))return'';const x=seriesX(key,index),y=yAt(value);return `<circle cx="${x}" cy="${y}" r="4.5" class="${cls}"><title>${label} ${row.year}: ${fullMoney(value)}</title></circle>`}).join('');
+    svg.setAttribute('viewBox',`0 0 ${width} ${height}`);svg.style.width=width+'px';svg.innerHTML=grid+xLabels+bars('target')+bars('actual')+`<path d="${smoothPath('target')}" class="dashboard-trend-target-line"/><path d="${smoothPath('actual')}" class="dashboard-trend-actual-line"/>`+points('target','dashboard-trend-target-point','Proyeksi')+points('actual','dashboard-trend-actual-point','Realisasi');const actualYears=data.filter(row=>row.actual!==undefined&&row.actual!==null).length;if(note)note.textContent=actualYears?'Grafik mencakup '+years.length+' tahun; realisasi sudah diinput untuk '+actualYears+' tahun. Arahkan kursor ke titik untuk melihat nilai lengkap.':'Target proyeksi tersedia untuk '+years.length+' tahun. Input realisasi tahunan agar garis realisasi ikut terlihat.';
   }  function renderRealizationPage() {
     const yearField = input('realizationYear'); if (!yearField) return;
     const plans = projectionPlanList(), savedActuals = actualList(), currentYear = new Date().getFullYear();

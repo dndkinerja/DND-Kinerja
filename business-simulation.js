@@ -463,7 +463,18 @@
     rows.push({ label: 'Dasar biaya untuk estimasi PPN masukan', category: 'PPN', amount: calc.vatEligibleSpend, note: 'Biaya langsung dan operasional lain, tidak termasuk gaji, THR, dan iuran pemberi kerja.' });
     rows.push({ label: 'Estimasi PPN masukan dapat dikreditkan', category: 'PPN', amount: calc.vatInput, note: `Estimasi ${safePercent(state.inputVatShare).toLocaleString('id-ID')}% biaya non-gaji memiliki faktur yang memenuhi syarat.` });
     rows.push({ label: 'Estimasi PPN disetor', category: 'PPN', amount: calc.vatPayable, note: 'PPN keluaran dikurangi kredit PPN masukan yang diperkirakan.' });
-    input('projectionCostRows').innerHTML = rows.map(row => `<tr><td>${row.label}</td><td>${row.category}</td><td>${money(row.amount)}</td><td>${row.note}</td></tr>`).join('');
+        const groups = [
+      { key: 'profit', title: 'Laba', subtitle: 'Ringkasan hasil usaha dan target laba', color: '#21764f', background: '#eaf7f0', border: '#2f9b72', match: row => ['Hasil usaha', 'Rencana laba'].includes(row.category), summaryLabel: 'Laba bersih proyeksi', summaryAmount: calc.net, summaryNote: 'Laba operasional setelah PPh final.' },
+      { key: 'cost', title: 'Biaya', subtitle: 'Biaya langsung, gaji, dan operasional', color: '#9a5b12', background: '#fff5e8', border: '#e3a03f', match: row => !['Hasil usaha', 'Rencana laba', 'Pajak penghasilan', 'PPN'].includes(row.category), summaryLabel: 'Total biaya tahunan', summaryAmount: calc.direct + calc.operating, summaryNote: 'Biaya langsung ditambah seluruh biaya operasional.' },
+      { key: 'tax', title: 'Pajak', subtitle: 'PPh final dan estimasi PPN', color: '#6941a5', background: '#f3effb', border: '#8b6ac5', match: row => ['Pajak penghasilan', 'PPN'].includes(row.category), summaryLabel: 'Estimasi PPh + PPN disetor', summaryAmount: calc.pph + calc.vatPayable, summaryNote: 'PPh final konstruksi ditambah estimasi PPN bersih yang disetor.' }
+    ];
+    input('projectionCostRows').innerHTML = groups.map(group => {
+      const groupRows = rows.filter(group.match);
+      const heading = `<tr class="breakdown-group breakdown-group-${group.key}"><td colspan="4" style="padding:12px 14px;background:${group.background};border-left:4px solid ${group.border}"><div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap"><div><span style="display:block;font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:${group.color};font-weight:800">Kategori ringkasan</span><strong style="display:block;margin-top:3px;font-size:14px;color:${group.color}">${group.title}</strong><small style="color:#687b86">${group.subtitle}</small></div><span style="padding:4px 9px;border-radius:20px;background:#ffffffb8;color:${group.color};font-size:10px;font-weight:700">${groupRows.length} komponen</span></div></td></tr>`;
+      const detailRows = groupRows.map(row => `<tr class="breakdown-row breakdown-row-${group.key}"><td><strong>${row.label}</strong></td><td><span style="display:inline-block;padding:3px 8px;border-radius:20px;background:${group.background};color:${group.color};font-size:10px;font-weight:700">${row.category}</span></td><td style="white-space:nowrap;font-weight:700;color:#203342">${money(row.amount)}</td><td style="min-width:280px;color:#647985">${row.note}</td></tr>`).join('');
+      const summary = `<tr class="breakdown-summary breakdown-summary-${group.key}"><td colspan="2" style="padding:10px 12px;background:#fafcfc"><strong style="color:${group.color}">${group.summaryLabel}</strong></td><td style="padding:10px 12px;background:#fafcfc;white-space:nowrap;font-size:13px;font-weight:800;color:${group.color}">${money(group.summaryAmount)}</td><td style="padding:10px 12px;background:#fafcfc;color:#647985;font-size:10px">${group.summaryNote}</td></tr>`;
+      return heading + detailRows + summary;
+    }).join('');
   }
 
   function renderQuarters(calc) {
